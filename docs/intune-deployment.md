@@ -15,15 +15,39 @@ organizational choice; authorization is based on the immediate issuing CA.
 
 ## 3. Configure the script
 
-Edit only the configuration block:
+For `dev`, `prod`, and `premium`, configure broker mode:
 
 ```powershell
+$UploadMode = 'Broker'
 $BrokerUri = 'https://<function-app-hostname>/api/telemetry'
 $AssignmentTimestampUtc = '2026-08-27T15:00:00Z'
 $TrustedIssuerCaSha256Thumbprints = @(
     '<64-character-SHA256-fingerprint>'
 )
 ```
+
+For the minimal Proof of Concept profile, configure direct mode:
+
+```powershell
+$UploadMode = 'DirectLogs'
+$DirectTenantId = '<tenant-guid>'
+$DirectClientId = '<app-registration-client-id>'
+$DirectLogsIngestionEndpoint = 'https://<dcr-endpoint>'
+$DirectDcrImmutableId = 'dcr-<immutable-id>'
+$DirectStreamName = 'Custom-IntuneDeploymentTelemetry'
+$DirectApplicationCertificateSha256Thumbprint = '<64-character-SHA256-fingerprint>'
+$DirectIncludeSensitiveData = $false
+```
+
+The direct-mode certificate is an application credential created only for the
+Proof of Concept. It must be present with its RSA private key in
+`LocalMachine\My`. The script selects it only by the configured SHA-256
+fingerprint; it does not reuse or discover the normal telemetry mTLS
+certificate.
+
+Direct mode omits UPN, the interactive username, and raw MDM event messages by
+default. Set `DirectIncludeSensitiveData` to `$true` only after an explicit
+privacy review.
 
 Increment `Major.Minor.Build`, sign the final file, and don't modify it after
 signing.

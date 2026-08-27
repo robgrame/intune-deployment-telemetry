@@ -38,26 +38,33 @@ jobs:
       - name: Verify formatting
         run: dotnet format .\IntuneDeploymentTelemetry.slnx --verify-no-changes --no-restore
 
-      - name: Parse endpoint script
+      - name: Parse PowerShell scripts
         shell: pwsh
         run: |
-          $tokens = $null
-          $errors = $null
-          [System.Management.Automation.Language.Parser]::ParseFile(
-            '.\scripts\intune\Intune-DeploymentTelemetry.ps1',
-            [ref]$tokens,
-            [ref]$errors
-          ) | Out-Null
-          if ($errors.Count -gt 0) {
-            $errors | Format-List | Out-String | Write-Error
-            exit 1
+          foreach ($script in Get-ChildItem .\scripts -Filter *.ps1 -Recurse) {
+            $tokens = $null
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile(
+              $script.FullName,
+              [ref]$tokens,
+              [ref]$errors
+            ) | Out-Null
+            if ($errors.Count -gt 0) {
+              $errors | Format-List | Out-String | Write-Error
+              exit 1
+            }
           }
+
+      - name: Test direct-ingestion client assertion
+        shell: pwsh
+        run: .\tests\powershell\Test-DirectIngestionClientAssertion.ps1
 
       - name: Build Bicep
         shell: pwsh
         run: |
           az bicep install
           az bicep build --file .\infra\main.bicep --stdout | Out-Null
+          az bicep build --file .\infra\poc.bicep --stdout | Out-Null
 
   dependency-review:
     name: Dependency review

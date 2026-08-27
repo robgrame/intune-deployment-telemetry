@@ -17,11 +17,19 @@ the endpoint.
 #>
 
 #region Configuration - set these values before signing and uploading to Intune
+$UploadMode = 'Broker'
 $BrokerUri = 'https://<FUNCTION-APP-HOSTNAME>/api/telemetry'
 $AssignmentTimestampUtc = '<ASSIGNMENT-TIMESTAMP-UTC>'
 $TrustedIssuerCaSha256Thumbprints = @(
     '<ISSUING-CA-SHA256-THUMBPRINT>'
 )
+$DirectTenantId = '<ENTRA-TENANT-ID>'
+$DirectClientId = '<APP-REGISTRATION-CLIENT-ID>'
+$DirectLogsIngestionEndpoint = 'https://<DCR-LOGS-INGESTION-ENDPOINT>'
+$DirectDcrImmutableId = '<DCR-IMMUTABLE-ID>'
+$DirectStreamName = 'Custom-IntuneDeploymentTelemetry'
+$DirectApplicationCertificateSha256Thumbprint = '<APPLICATION-CERTIFICATE-SHA256-THUMBPRINT>'
+$DirectIncludeSensitiveData = $false
 $EventLookbackHours = 72
 $MaximumMdmEvents = 20
 $UploadRetryCount = 4
@@ -33,7 +41,7 @@ Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
-$ScriptVersion = '1.2.3'
+$ScriptVersion = '1.3.5'
 $RegistryPath = 'HKLM:\SOFTWARE\Bigfix Tags\IntuneDeploymentTelemetry'
 $LogDirectory = Join-Path $env:ProgramData 'IntuneDeploymentTelemetry'
 $TranscriptPath = $null
@@ -786,6 +794,160 @@ function Get-TelemetryClientCertificate {
     return $certificates[0]
 }
 
+function ConvertTo-Base64Url {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [byte[]]$Bytes
+    )
+
+    return [Convert]::ToBase64String($Bytes).TrimEnd('=').Replace('+', '-').Replace('/', '_')
+}
+
+function Get-DirectIngestionCertificate {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string]$Sha256Thumbprint
+    )
+
+    $normalizedThumbprint = ($Sha256Thumbprint -replace '[^0-9A-Fa-f]', '').ToUpperInvariant()
+    if ($normalizedThumbprint -notmatch '^[0-9A-F]{64}$') {
+        throw 'DirectApplicationCertificateSha256Thumbprint must contain 64 hexadecimal characters.'
+    }
+
+    $now = [datetime]::UtcNow
+    $matches = @(
+        Get-ChildItem -LiteralPath 'Cert:\LocalMachine\My' |
+            Where-Object {
+                $_.HasPrivateKey -and
+                $_.NotBefore.ToUniversalTime() -le $now -and
+                $_.NotAfter.ToUniversalTime() -gt $now -and
+                (Get-CertificateSha256Thumbprint -Certificate $_) -eq $normalizedThumbprint
+            }
+    )
+
+    if ($matches.Count -ne 1) {
+        throw "Expected exactly one valid direct-ingestion certificate with SHA-256 fingerprint $normalizedThumbprint in LocalMachine\My; found $($matches.Count)."
+    }
+
+    $rsa = [Security.Cryptography.X509Certificates.RSACertificateExtensions]::GetRSAPrivateKey(
+        $matches[0]
+    )
+    if ($null -eq $rsa) {
+        throw 'The direct-ingestion application certificate must contain an RSA private key.'
+    }
+    $rsa.Dispose()
+
+    return $matches[0]
+}
+
+function New-DirectIngestionClientAssertion {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [Security.Cryptography.X509Certificates.X509Certificate2]$Certificate,
+
+        [Parameter(Mandatory)]
+        [guid]$ClientId,
+
+        [Parameter(Mandatory)]
+        [uri]$TokenEndpoint
+    )
+
+    $now = [DateTimeOffset]::UtcNow
+    $sha256 = [Security.Cryptography.SHA256]::Create()
+    try {
+        $certificateHash = $sha256.ComputeHash($Certificate.RawData)
+    }
+    finally {
+        $sha256.Dispose()
+    }
+    $header = [ordered]@{
+        alg        = 'RS256'
+        typ        = 'JWT'
+        'x5t#S256' = ConvertTo-Base64Url -Bytes $certificateHash
+    }
+    $claims = [ordered]@{
+        aud = $TokenEndpoint.AbsoluteUri
+        iss = $ClientId.ToString()
+        sub = $ClientId.ToString()
+        jti = [guid]::NewGuid().ToString()
+        nbf = $now.AddMinutes(-1).ToUnixTimeSeconds()
+        exp = $now.AddMinutes(5).ToUnixTimeSeconds()
+    }
+
+    $encodedHeader = ConvertTo-Base64Url -Bytes (
+        [Text.Encoding]::UTF8.GetBytes(
+            (ConvertTo-Json -InputObject $header -Compress)
+        )
+    )
+    $encodedClaims = ConvertTo-Base64Url -Bytes (
+        [Text.Encoding]::UTF8.GetBytes(
+            (ConvertTo-Json -InputObject $claims -Compress)
+        )
+    )
+    $unsignedAssertion = "$encodedHeader.$encodedClaims"
+    $rsa = [Security.Cryptography.X509Certificates.RSACertificateExtensions]::GetRSAPrivateKey(
+        $Certificate
+    )
+    if ($null -eq $rsa) {
+        throw 'The direct-ingestion application certificate does not expose an RSA private key.'
+    }
+
+    try {
+        $signature = $rsa.SignData(
+            [Text.Encoding]::ASCII.GetBytes($unsignedAssertion),
+            [Security.Cryptography.HashAlgorithmName]::SHA256,
+            [Security.Cryptography.RSASignaturePadding]::Pkcs1
+        )
+    }
+    finally {
+        $rsa.Dispose()
+    }
+
+    return "$unsignedAssertion.$(ConvertTo-Base64Url -Bytes $signature)"
+}
+
+function Get-DirectIngestionAccessToken {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [guid]$TenantId,
+
+        [Parameter(Mandatory)]
+        [guid]$ClientId,
+
+        [Parameter(Mandatory)]
+        [Security.Cryptography.X509Certificates.X509Certificate2]$Certificate,
+
+        [Parameter(Mandatory)]
+        [int]$TimeoutSeconds
+    )
+
+    $tokenEndpoint = [uri](
+        'https://login.microsoftonline.com/{0}/oauth2/v2.0/token' -f $TenantId
+    )
+    $assertion = New-DirectIngestionClientAssertion -Certificate $Certificate `
+        -ClientId $ClientId -TokenEndpoint $tokenEndpoint
+    $tokenRequest = @{
+        client_id             = $ClientId.ToString()
+        scope                 = 'https://monitor.azure.com//.default'
+        client_assertion_type = 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer'
+        client_assertion      = $assertion
+        grant_type            = 'client_credentials'
+    }
+
+    $response = Invoke-RestMethod -Uri $tokenEndpoint -Method Post `
+        -ContentType 'application/x-www-form-urlencoded' -Body $tokenRequest `
+        -TimeoutSec $TimeoutSeconds -ErrorAction Stop
+    if ([string]::IsNullOrWhiteSpace([string]$response.access_token)) {
+        throw 'Microsoft Entra returned no access token for direct ingestion.'
+    }
+
+    return [string]$response.access_token
+}
+
 function Send-TelemetryBrokerData {
     [CmdletBinding()]
     param(
@@ -856,6 +1018,135 @@ function Send-TelemetryBrokerData {
         StatusCode = $null
         Attempts   = $lastAttempt
     }
+}
+
+function Send-TelemetryDirectData {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [uri]$LogsIngestionEndpoint,
+
+        [Parameter(Mandatory)]
+        [string]$DcrImmutableId,
+
+        [Parameter(Mandatory)]
+        [string]$StreamName,
+
+        [Parameter(Mandatory)]
+        [guid]$TenantId,
+
+        [Parameter(Mandatory)]
+        [guid]$ClientId,
+
+        [Parameter(Mandatory)]
+        [Security.Cryptography.X509Certificates.X509Certificate2]$Certificate,
+
+        [Parameter(Mandatory)]
+        [byte[]]$Body,
+
+        [Parameter(Mandatory)]
+        [int]$RetryCount,
+
+        [Parameter(Mandatory)]
+        [int]$TimeoutSeconds
+    )
+
+    $escapedDcrId = [uri]::EscapeDataString($DcrImmutableId)
+    $escapedStreamName = [uri]::EscapeDataString($StreamName)
+    $requestUri = [uri](
+        '{0}/dataCollectionRules/{1}/streams/{2}?api-version=2023-01-01' -f
+        $LogsIngestionEndpoint.AbsoluteUri.TrimEnd('/'),
+        $escapedDcrId,
+        $escapedStreamName
+    )
+
+    $lastAttempt = 0
+    for ($attempt = 1; $attempt -le $RetryCount; $attempt++) {
+        $lastAttempt = $attempt
+        try {
+            $accessToken = Get-DirectIngestionAccessToken -TenantId $TenantId `
+                -ClientId $ClientId -Certificate $Certificate `
+                -TimeoutSeconds $TimeoutSeconds
+            $headers = @{
+                Authorization = "Bearer $accessToken"
+            }
+            $response = Invoke-WebRequest -Uri $requestUri -Method Post `
+                -Headers $headers -ContentType 'application/json' `
+                -Body $Body -UseBasicParsing -TimeoutSec $TimeoutSeconds `
+                -ErrorAction Stop
+            if ($response.StatusCode -in @(200, 202, 204)) {
+                return [pscustomobject]@{
+                    Success    = $true
+                    StatusCode = [int]$response.StatusCode
+                    Attempts   = $attempt
+                }
+            }
+            throw "Unexpected HTTP status code $($response.StatusCode)."
+        }
+        catch {
+            Add-TelemetryError -Operation ('DirectLogsUploadAttempt:{0}' -f $attempt) `
+                -ErrorRecord $_
+            $statusCode = $null
+            $errorResponse = Get-PropertyValue -InputObject $_.Exception -Name 'Response'
+            $responseStatus = Get-PropertyValue -InputObject $errorResponse -Name 'StatusCode'
+            if ($null -ne $responseStatus) {
+                $statusCode = [int]$responseStatus
+            }
+            if ($statusCode -in @(400, 401, 403, 404, 409, 413, 422)) {
+                break
+            }
+            if ($attempt -eq $RetryCount) {
+                break
+            }
+
+            $delaySeconds = [Math]::Min(30, [Math]::Pow(2, $attempt - 1)) +
+                (Get-Random -Minimum 0 -Maximum 1000) / 1000
+            Start-Sleep -Milliseconds ([int]($delaySeconds * 1000))
+        }
+        finally {
+            $accessToken = $null
+        }
+    }
+
+    return [pscustomobject]@{
+        Success    = $false
+        StatusCode = $null
+        Attempts   = $lastAttempt
+    }
+}
+
+function ConvertTo-DirectIngestionPayload {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [Collections.IDictionary]$Payload,
+
+        [Parameter(Mandatory)]
+        [Security.Cryptography.X509Certificates.X509Certificate2]$Certificate,
+
+        [Parameter(Mandatory)]
+        [bool]$IncludeSensitiveData
+    )
+
+    if (-not $IncludeSensitiveData) {
+        $Payload.Remove('UserUPN')
+        $Payload.Remove('CurrentLoggedOnUser')
+        foreach ($event in @($Payload.MDMEvents)) {
+            $event.PSObject.Properties.Remove('Message')
+        }
+    }
+
+    $Payload.Add(
+        'BrokerReceivedTimestampUtc',
+        (ConvertTo-UtcIso8601 -Value ([datetime]::UtcNow))
+    )
+    $Payload.Add('BrokerRequestId', $Payload.ExecutionId)
+    $Payload.Add(
+        'ClientCertificateThumbprint',
+        (Get-CertificateSha256Thumbprint -Certificate $Certificate)
+    )
+    $Payload.Add('ClientCertificateIssuerThumbprint', $null)
+    return $Payload
 }
 
 function New-TelemetryPayload {
@@ -1089,11 +1380,44 @@ try {
         throw 'AssignmentTimestampUtc is not a valid ISO 8601 timestamp.'
     }
     if (-not $SkipUpload) {
-        $parsedBrokerUri = $null
-        if (-not [uri]::TryCreate($BrokerUri, [UriKind]::Absolute, [ref]$parsedBrokerUri) -or
-            $parsedBrokerUri.Scheme -ne 'https' -or
-            $parsedBrokerUri.AbsolutePath.TrimEnd('/') -ne '/api/telemetry') {
-            throw 'Configure BrokerUri as an HTTPS /api/telemetry endpoint.'
+        if ($UploadMode -notin @('Broker', 'DirectLogs')) {
+            throw "UploadMode must be 'Broker' or 'DirectLogs'."
+        }
+        if ($UploadMode -eq 'Broker') {
+            $parsedBrokerUri = $null
+            if (-not [uri]::TryCreate($BrokerUri, [UriKind]::Absolute, [ref]$parsedBrokerUri) -or
+                $parsedBrokerUri.Scheme -ne 'https' -or
+                $parsedBrokerUri.AbsolutePath.TrimEnd('/') -ne '/api/telemetry') {
+                throw 'Configure BrokerUri as an HTTPS /api/telemetry endpoint.'
+            }
+        }
+        else {
+            $parsedDirectEndpoint = $null
+            if (-not [uri]::TryCreate(
+                $DirectLogsIngestionEndpoint,
+                [UriKind]::Absolute,
+                [ref]$parsedDirectEndpoint
+            ) -or $parsedDirectEndpoint.Scheme -ne 'https' -or
+                -not [string]::IsNullOrEmpty($parsedDirectEndpoint.UserInfo) -or
+                -not [string]::IsNullOrEmpty($parsedDirectEndpoint.Query) -or
+                -not [string]::IsNullOrEmpty($parsedDirectEndpoint.Fragment) -or
+                $parsedDirectEndpoint.Host -notmatch '(?i)(^|\.)ingest\.monitor\.azure\.com$') {
+                throw 'Configure DirectLogsIngestionEndpoint as an Azure Monitor HTTPS ingestion URI without credentials, query, or fragment.'
+            }
+            $parsedTenantId = [guid]::Empty
+            if (-not [guid]::TryParse($DirectTenantId, [ref]$parsedTenantId)) {
+                throw 'DirectTenantId must be a GUID.'
+            }
+            $parsedClientId = [guid]::Empty
+            if (-not [guid]::TryParse($DirectClientId, [ref]$parsedClientId)) {
+                throw 'DirectClientId must be a GUID.'
+            }
+            if ($DirectDcrImmutableId -notmatch '^dcr-[0-9A-Za-z]+$') {
+                throw 'DirectDcrImmutableId must be a valid immutable DCR identifier.'
+            }
+            if ($DirectStreamName -notmatch '^Custom-[A-Za-z][A-Za-z0-9_]{0,127}$') {
+                throw 'DirectStreamName must be a valid custom DCR stream name.'
+            }
         }
     }
     $assignmentValue = [Nullable[datetime]]$parsedAssignment.UtcDateTime
@@ -1112,15 +1436,36 @@ try {
     else {
         [Net.ServicePointManager]::SecurityProtocol = `
             [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-        $certificate = Get-TelemetryClientCertificate `
-            -TrustedIssuerSha256Thumbprints $TrustedIssuerCaSha256Thumbprints
-        $json = ConvertTo-Json -InputObject $payload -Depth 8 -Compress
-        $body = [Text.Encoding]::UTF8.GetBytes($json)
-        $upload = Send-TelemetryBrokerData -Uri $parsedBrokerUri `
-            -Certificate $certificate -Body $body `
-            -RetryCount $UploadRetryCount `
-            -TimeoutSeconds $UploadTimeoutSeconds `
-            -RequestId ([guid]$payload.ExecutionId)
+        if ($UploadMode -eq 'Broker') {
+            $certificate = Get-TelemetryClientCertificate `
+                -TrustedIssuerSha256Thumbprints $TrustedIssuerCaSha256Thumbprints
+            $json = ConvertTo-Json -InputObject $payload -Depth 8 -Compress
+            $body = [Text.Encoding]::UTF8.GetBytes($json)
+            $upload = Send-TelemetryBrokerData -Uri $parsedBrokerUri `
+                -Certificate $certificate -Body $body `
+                -RetryCount $UploadRetryCount `
+                -TimeoutSeconds $UploadTimeoutSeconds `
+                -RequestId ([guid]$payload.ExecutionId)
+        }
+        else {
+            $certificate = Get-DirectIngestionCertificate `
+                -Sha256Thumbprint $DirectApplicationCertificateSha256Thumbprint
+            $payload = ConvertTo-DirectIngestionPayload -Payload $payload `
+                -Certificate $certificate `
+                -IncludeSensitiveData $DirectIncludeSensitiveData
+            $directJson = ConvertTo-Json -InputObject @($payload) -Depth 8 -Compress
+            $body = [Text.Encoding]::UTF8.GetBytes($directJson)
+            $upload = Send-TelemetryDirectData `
+                -LogsIngestionEndpoint $parsedDirectEndpoint `
+                -DcrImmutableId $DirectDcrImmutableId `
+                -StreamName $DirectStreamName `
+                -TenantId $parsedTenantId `
+                -ClientId $parsedClientId `
+                -Certificate $certificate `
+                -Body $body `
+                -RetryCount $UploadRetryCount `
+                -TimeoutSeconds $UploadTimeoutSeconds
+        }
 
         if (-not $upload.Success) {
             $payload.BrokerUploadSuccess = $false
@@ -1133,13 +1478,13 @@ try {
                 )
                 ConvertTo-Json -InputObject @($payload) -Depth 8 |
                     Set-Content -LiteralPath $failurePath -Encoding UTF8 -Force
-                throw "Broker upload failed after $($upload.Attempts) attempts. Payload saved to $failurePath."
+                throw "$UploadMode upload failed after $($upload.Attempts) attempts. Payload saved to $failurePath."
             }
-            throw "Broker upload failed after $($upload.Attempts) attempts. Local persistence was disabled because secure storage validation failed."
+            throw "$UploadMode upload failed after $($upload.Attempts) attempts. Local persistence was disabled because secure storage validation failed."
         }
 
-        Write-Output ('Telemetry accepted by broker. ExecutionId={0}; HTTP={1}; Attempts={2}' -f `
-            $payload.ExecutionId, $upload.StatusCode, $upload.Attempts)
+        Write-Output ('Telemetry accepted. Mode={0}; ExecutionId={1}; HTTP={2}; Attempts={3}' -f `
+            $UploadMode, $payload.ExecutionId, $upload.StatusCode, $upload.Attempts)
     }
 }
 catch {

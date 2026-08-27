@@ -160,19 +160,25 @@ Application Insights stores broker operations and never the raw payload.
 
 ## Environment profiles
 
-| Concern | `dev` | `prod` | `premium` |
-|---|---|---|---|
-| Functions plan | Consumption Y1 | Elastic Premium EP1 | Elastic Premium EP2 |
-| Warm instances | Scale to zero | 1 | 2 |
-| Zone redundancy | No | Region-dependent | Yes, supported regions |
-| Log retention | 30 days | 90 days | 365 days |
-| Daily cap | 1 GB | 20 GB | 100 GB |
-| App Configuration | Free | Standard | Standard |
-| Network posture | Public mTLS endpoint | Public mTLS endpoint | Public mTLS; private/WAF extension point |
+| Concern | `poc` | `dev` | `prod` | `premium` |
+|---|---|---|---|---|
+| Functions plan | None | Consumption Y1 | Elastic Premium EP1 | Elastic Premium EP2 |
+| Warm instances | N/A | Scale to zero | 1 | 2 |
+| Maximum scale-out | N/A | 10 | 20 | 50 |
+| Zone redundancy | No | No | Region-dependent | Yes, supported regions |
+| Log retention | 30 days | 30 days | 90 days | 365 days |
+| Daily cap | 1 GB | 1 GB | 20 GB | 100 GB |
+| App Configuration | None | Free | Standard | Standard |
+| Network posture | Direct public DCR endpoint | Public mTLS endpoint | Public mTLS endpoint | Public mTLS; private/WAF extension point |
 
 The development profile prioritizes low cost and can exhibit cold starts.
 Elastic Premium is used in production because pre-warmed workers remove
 broker startup noise from the latency measurement itself.
+
+The Proof of Concept (`poc`) profile is a deliberately different direct
+ingestion architecture. It transfers the Azure authentication boundary to
+untrusted endpoints and is documented in the
+[Proof of Concept direct-ingestion plan](poc-direct-ingestion.md).
 
 ## Reliability
 

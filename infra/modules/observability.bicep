@@ -13,6 +13,15 @@ param retentionInDays int
 @description('Log Analytics daily ingestion cap in GB.')
 param dailyCapGb int
 
+@description('Deploy Application Insights for broker observability.')
+param deployApplicationInsights bool = true
+
+@description('Deploy a separate Data Collection Endpoint.')
+param deployDataCollectionEndpoint bool = true
+
+@description('Optional service principal object ID granted direct ingestion access.')
+param ingestionPrincipalId string = ''
+
 param tags object
 
 var workspaceName = 'law-${resourcePrefix}-${uniqueSuffix}'
@@ -240,7 +249,7 @@ resource telemetryTable 'Microsoft.OperationalInsights/workspaces/tables@2025-07
   }
 }
 
-resource dataCollectionEndpoint 'Microsoft.Insights/dataCollectionEndpoints@2021-04-01' = {
+resource dataCollectionEndpoint 'Microsoft.Insights/dataCollectionEndpoints@2021-04-01' = if (deployDataCollectionEndpoint) {
   name: dceName
   location: location
   tags: tags
@@ -257,7 +266,7 @@ resource dataCollectionRule 'Microsoft.Insights/dataCollectionRules@2023-03-11' 
   tags: tags
   kind: 'Direct'
   properties: {
-    dataCollectionEndpointId: dataCollectionEndpoint.id
+    dataCollectionEndpointId: deployDataCollectionEndpoint ? dataCollectionEndpoint.id : null
     streamDeclarations: {
       '${streamName}': {
         columns: telemetryColumns
@@ -286,7 +295,7 @@ resource dataCollectionRule 'Microsoft.Insights/dataCollectionRules@2023-03-11' 
   }
 }
 
-resource applicationInsights 'Microsoft.Insights/components@2020-02-02' = {
+resource applicationInsights 'Microsoft.Insights/components@2020-02-02' = if (deployApplicationInsights) {
   name: applicationInsightsName
   location: location
   kind: 'web'
@@ -301,10 +310,29 @@ resource applicationInsights 'Microsoft.Insights/components@2020-02-02' = {
   }
 }
 
+var monitoringMetricsPublisherRoleId = subscriptionResourceId(
+  'Microsoft.Authorization/roleDefinitions',
+  '3913510d-42f4-4e42-8a64-420c390055eb'
+)
+
+resource directIngestionPublisher 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(ingestionPrincipalId)) {
+  name: guid(dataCollectionRule.id, ingestionPrincipalId, monitoringMetricsPublisherRoleId)
+  scope: dataCollectionRule
+  properties: {
+    principalId: ingestionPrincipalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: monitoringMetricsPublisherRoleId
+  }
+}
+
 output workspaceName string = workspace.name
 output tableName string = tableName
 output dcrName string = dataCollectionRule.name
 output dcrResourceId string = dataCollectionRule.id
 output dcrImmutableId string = dataCollectionRule.properties.immutableId
-output logsIngestionEndpoint string = dataCollectionEndpoint.properties.logsIngestion.endpoint
-output applicationInsightsConnectionString string = applicationInsights.properties.ConnectionString
+output logsIngestionEndpoint string = deployDataCollectionEndpoint
+  ? dataCollectionEndpoint!.properties.logsIngestion.endpoint
+  : dataCollectionRule.properties.endpoints.logsIngestion
+output applicationInsightsConnectionString string = deployApplicationInsights
+  ? applicationInsights!.properties.ConnectionString
+  : ''
