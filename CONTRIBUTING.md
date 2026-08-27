@@ -21,6 +21,7 @@ Thank you for helping improve Intune Deployment Telemetry.
    dotnet build .\IntuneDeploymentTelemetry.slnx --configuration Release --no-restore
    dotnet test .\IntuneDeploymentTelemetry.slnx --configuration Release --no-build
    az bicep build --file .\infra\main.bicep
+   az bicep build --file .\infra\poc.bicep
    ```
 
 5. Explain security and operational impact in the pull request.

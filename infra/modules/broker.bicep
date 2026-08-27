@@ -68,9 +68,9 @@ resource appConfiguration 'Microsoft.AppConfiguration/configurationStores@2024-0
   }
   properties: {
     disableLocalAuth: true
-    enablePurgeProtection: solutionSku != 'dev'
+    enablePurgeProtection: solutionSku == 'prod' || solutionSku == 'premium'
     publicNetworkAccess: 'Enabled'
-    softDeleteRetentionInDays: solutionSku == 'dev' ? 1 : 30
+    softDeleteRetentionInDays: solutionSku == 'prod' || solutionSku == 'premium' ? 30 : 1
   }
 }
 
@@ -81,10 +81,10 @@ resource keyVault 'Microsoft.KeyVault/vaults@2024-11-01' = {
   properties: {
     tenantId: tenant().tenantId
     enableRbacAuthorization: true
-    enablePurgeProtection: solutionSku != 'dev'
+    enablePurgeProtection: solutionSku == 'prod' || solutionSku == 'premium'
     enableSoftDelete: true
     publicNetworkAccess: 'Enabled'
-    softDeleteRetentionInDays: solutionSku == 'dev' ? 7 : 90
+    softDeleteRetentionInDays: solutionSku == 'prod' || solutionSku == 'premium' ? 90 : 7
     sku: {
       family: 'A'
       name: 'standard'
@@ -180,7 +180,7 @@ resource plan 'Microsoft.Web/serverfarms@2024-11-01' = {
   properties: {
     reserved: true
     zoneRedundant: zoneRedundant
-    maximumElasticWorkerCount: maximumScaleOutLimit
+    maximumElasticWorkerCount: functionPlanTier == 'ElasticPremium' ? maximumScaleOutLimit : null
   }
 }
 
@@ -202,8 +202,9 @@ resource functionApp 'Microsoft.Web/sites@2024-11-01' = {
     clientCertExclusionPaths: '/api/health'
     publicNetworkAccess: 'Enabled'
     siteConfig: {
-      alwaysOn: solutionSku != 'dev'
+      alwaysOn: functionPlanTier == 'ElasticPremium'
       ftpsState: 'Disabled'
+      functionAppScaleLimit: maximumScaleOutLimit
       http20Enabled: true
       linuxFxVersion: 'DOTNET-ISOLATED|10.0'
       minTlsVersion: '1.2'

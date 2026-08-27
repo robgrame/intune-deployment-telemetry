@@ -1,7 +1,28 @@
 # 📦 Deployment SKUs
 
-The SKU is an operational profile, not a fork. All profiles deploy the same
-application and security controls.
+The broker SKUs (`dev`, `prod`, and `premium`) deploy the same application and
+security controls. The `poc` profile is an intentionally separate,
+direct-ingestion experiment.
+
+## `poc` — Proof of Concept
+
+Optimized for a short-lived, resource-constrained pilot.
+
+- no Function App or App Service plan
+- no Storage Account
+- no App Configuration or Key Vault
+- no Application Insights
+- no separate Data Collection Endpoint
+- 30-day Log Analytics retention
+- 1-GB/day ingestion cap
+- direct DCR logs-ingestion endpoint
+- DCR-scoped RBAC for an existing App Registration
+
+This profile is intentionally not architecture-equivalent to the supported
+broker profiles. It moves an Entra workload credential onto each participating
+endpoint and removes independent certificate and payload validation. Use it
+only for the bounded experiment described in the
+[Proof of Concept direct-ingestion plan](poc-direct-ingestion.md).
 
 ## `dev`
 
@@ -51,6 +72,7 @@ changing the broker contract.
 
 | Requirement | Choose |
 |---|---|
+| Short-lived constrained pilot | `poc` |
 | Functional evaluation or CI deployment | `dev` |
 | Stable production latency and normal tenant scale | `prod` |
 | Higher throughput, longer retention, zone redundancy | `premium` |
