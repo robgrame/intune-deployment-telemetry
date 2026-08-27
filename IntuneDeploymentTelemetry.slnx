@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Intune.Telemetry.Broker/Intune.Telemetry.Broker.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Intune.Telemetry.Broker.Tests/Intune.Telemetry.Broker.Tests.csproj" />
+  </Folder>
+</Solution>

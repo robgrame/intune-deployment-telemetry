@@ -1,0 +1,10 @@
+{
+  "version": "2.0",
+  "logging": {
+    "logLevel": {
+      "Default": "Information",
+      "Microsoft": "Warning",
+      "Azure.Core": "Warning"
+    }
+  }
+}

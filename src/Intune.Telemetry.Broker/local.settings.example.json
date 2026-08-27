@@ -1,0 +1,14 @@
+{
+  "IsEncrypted": false,
+  "Values": {
+    "AzureWebJobsStorage": "UseDevelopmentStorage=true",
+    "FUNCTIONS_WORKER_RUNTIME": "dotnet-isolated",
+    "AZURE_APPCONFIG_ENDPOINT": "",
+    "LOGS_INGESTION_ENDPOINT": "https://<dce-name>.<region>-1.ingest.monitor.azure.com",
+    "LOGS_DCR_IMMUTABLE_ID": "dcr-<immutable-id>",
+    "LOGS_STREAM_NAME": "Custom-IntuneDeploymentTelemetry",
+    "CLIENT_CERTIFICATE_TRUSTED_ROOTS_BASE64": "<BASE64_DER_ROOT_CERTIFICATE>[;<ANOTHER_BASE64_DER_ROOT_CERTIFICATE>]",
+    "CLIENT_CERTIFICATE_ISSUER_SHA256_THUMBPRINTS": "<ISSUING_CA_SHA256_HEX_THUMBPRINT>[;<ANOTHER_ISSUING_CA_SHA256_HEX_THUMBPRINT>]",
+    "TELEMETRY_MAX_BODY_BYTES": "131072"
+  }
+}

@@ -1,0 +1,11 @@
+name: intune-deployment-telemetry
+metadata:
+  template: intune-deployment-telemetry@1.0.0
+services:
+  broker:
+    project: ./src/Intune.Telemetry.Broker
+    language: csharp
+    host: function
+infra:
+  provider: bicep
+  path: infra

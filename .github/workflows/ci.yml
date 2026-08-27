@@ -1,0 +1,74 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Build, test, and validate
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Restore
+        run: dotnet restore .\IntuneDeploymentTelemetry.slnx
+
+      - name: Build
+        run: dotnet build .\IntuneDeploymentTelemetry.slnx --configuration Release --no-restore
+
+      - name: Test
+        run: dotnet test .\IntuneDeploymentTelemetry.slnx --configuration Release --no-build
+
+      - name: Verify formatting
+        run: dotnet format .\IntuneDeploymentTelemetry.slnx --verify-no-changes --no-restore
+
+      - name: Parse endpoint script
+        shell: pwsh
+        run: |
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            '.\scripts\intune\Intune-DeploymentTelemetry.ps1',
+            [ref]$tokens,
+            [ref]$errors
+          ) | Out-Null
+          if ($errors.Count -gt 0) {
+            $errors | Format-List | Out-String | Write-Error
+            exit 1
+          }
+
+      - name: Build Bicep
+        shell: pwsh
+        run: |
+          az bicep install
+          az bicep build --file .\infra\main.bicep --stdout | Out-Null
+
+  dependency-review:
+    name: Dependency review
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Review dependencies
+        uses: actions/dependency-review-action@v4
