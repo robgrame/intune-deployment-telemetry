@@ -2,6 +2,11 @@
 
 The custom table is `IntuneDeploymentTelemetry_CL`.
 
+Several of these queries are incorporated into the
+[deployment evidence Workbook](deployment-workbook.md), which is deployed for
+every solution profile. The additional queries below support ad-hoc analysis
+and operational investigation.
+
 ## First devices reached
 
 ```kusto
@@ -48,6 +53,7 @@ IntuneDeploymentTelemetry_CL
 ```kusto
 IntuneDeploymentTelemetry_CL
 | summarize arg_min(FirstExecutionTimestampUtc, *) by AzureAdDeviceId
+| where isnotnull(AssignmentToExecutionMinutes)
 | extend
     BootAfterAssignment = LastBootTimeUtc > AssignmentTimestampUtc,
     MdmSyncAfterAssignment = LastKnownMDMSync >= AssignmentTimestampUtc

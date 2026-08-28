@@ -15,6 +15,7 @@ Use the Azure Monitor Logs Ingestion API with:
   isn't required;
 - a dedicated Microsoft Entra application with a short-lived client secret;
 - **Monitoring Metrics Publisher** scoped only to the experimental DCR;
+- a shared Azure Monitor Workbook for customer-facing deployment evidence;
 - OAuth 2.0 client-credentials authentication from the Platform Script.
 
 The legacy HTTP Data Collector API isn't an acceptable POC shortcut. It
@@ -22,9 +23,10 @@ requires the Log Analytics workspace shared key, gives every endpoint the same
 high-impact credential, and is on the retirement path in favor of the Logs
 Ingestion API.
 
-The Bicep deployment outputs the DCR endpoint and immutable ID. The App
-Registration itself is a Microsoft Entra tenant object and must exist before
-the resource-group deployment. Pass its service principal object ID through
+The Bicep deployment outputs the DCR endpoint, immutable ID, and Workbook
+resource ID. The App Registration itself is a Microsoft Entra tenant object
+and must exist before the resource-group deployment. Pass its service
+principal object ID through
 `INTUNE_TELEMETRY_POC_SERVICE_PRINCIPAL_OBJECT_ID`.
 
 ## Shared client-secret model
@@ -74,8 +76,8 @@ This model proves transport and schema viability, not production security:
 1. Create a dedicated Entra application and service principal.
 2. Create a client secret with an expiry no later than the POC end date.
 3. Deploy the `poc` Bicep profile with the service principal object ID. The
-   deployment creates Log Analytics, the table, a direct DCR, and its scoped
-   role assignment.
+   deployment creates Log Analytics, the table, a direct DCR, its scoped role
+   assignment, and the deployment-evidence Workbook.
 4. Configure the endpoint script with `UploadMode = 'DirectLogs'`, the tenant
    ID, client ID, client secret, and Bicep outputs.
 5. Keep the secret in the ignored adjacent `*.secret.txt` file and use

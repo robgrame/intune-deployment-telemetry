@@ -1,0 +1,182 @@
+{
+  "version": "Notebook/1.0",
+  "items": [
+    {
+      "type": 1,
+      "content": {
+        "json": "# Intune Deployment Evidence\n\nCustomer-facing evidence for the first execution of the Intune telemetry script. Use the time selector to limit the analysis window. In the manual POC workflow, deployment latency includes script generation, signing, upload, assignment, and execution delay."
+      },
+      "name": "workbook-title"
+    },
+    {
+      "type": 9,
+      "content": {
+        "version": "KqlParameterItem/1.0",
+        "parameters": [
+          {
+            "id": "f96f52fb-c29a-4a60-a469-b4c59d22fa19",
+            "version": "KqlParameterItem/1.0",
+            "name": "TimeRange",
+            "label": "Analysis window",
+            "type": 4,
+            "isRequired": true,
+            "value": {
+              "durationMs": 2592000000
+            },
+            "typeSettings": {
+              "selectableValues": [
+                {
+                  "durationMs": 86400000
+                },
+                {
+                  "durationMs": 604800000
+                },
+                {
+                  "durationMs": 2592000000
+                },
+                {
+                  "durationMs": 7776000000
+                }
+              ],
+              "allowCustom": true
+            }
+          }
+        ],
+        "style": "pills",
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces"
+      },
+      "name": "analysis-parameters"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "IntuneDeploymentTelemetry_CL\n| summarize arg_min(FirstExecutionTimestampUtc, *) by AzureAdDeviceId\n| where isnotnull(AssignmentToExecutionMinutes)\n| summarize Devices=dcount(AzureAdDeviceId), P50Minutes=round(percentile(AssignmentToExecutionMinutes, 50), 1), P95Minutes=round(percentile(AssignmentToExecutionMinutes, 95), 1), P99Minutes=round(percentile(AssignmentToExecutionMinutes, 99), 1), Within60Devices=countif(AssignmentToExecutionMinutes <= 60)\n| extend Within60Percent=iff(Devices == 0, real(null), round(100.0 * Within60Devices / Devices, 1))\n| project Metrics=bag_pack(\"Devices reached\", todouble(Devices), \"P50 (minutes)\", P50Minutes, \"P95 (minutes)\", P95Minutes, \"P99 (minutes)\", P99Minutes, \"Within 60 minutes (%)\", Within60Percent)\n| mv-expand kind=array Metrics\n| project Metric=tostring(Metrics[0]), Value=todouble(Metrics[1])",
+        "size": 4,
+        "title": "Deployment latency summary",
+        "timeContextFromParameter": "TimeRange",
+        "exportToExcelOptions": "visible",
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "visualization": "tiles",
+        "tileSettings": {
+          "showBorder": true,
+          "titleContent": {
+            "columnMatch": "Metric",
+            "formatter": 1
+          },
+          "leftContent": {
+            "columnMatch": "Value",
+            "formatter": 12,
+            "formatOptions": {
+              "palette": "auto"
+            }
+          }
+        }
+      },
+      "name": "latency-summary"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "IntuneDeploymentTelemetry_CL\n| summarize arg_min(FirstExecutionTimestampUtc, *) by AzureAdDeviceId\n| where isnotnull(AssignmentToExecutionMinutes)\n| summarize Devices=count() by bin(FirstExecutionTimestampUtc, 15m)\n| order by FirstExecutionTimestampUtc asc\n| serialize\n| extend CumulativeDevices=row_cumsum(Devices)\n| project FirstExecutionTimestampUtc, CumulativeDevices",
+        "size": 0,
+        "title": "Cumulative devices reached",
+        "timeContextFromParameter": "TimeRange",
+        "exportToExcelOptions": "all",
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "visualization": "timechart"
+      },
+      "name": "cumulative-devices"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "IntuneDeploymentTelemetry_CL\n| summarize arg_min(FirstExecutionTimestampUtc, *) by AzureAdDeviceId\n| where isnotnull(AssignmentToExecutionMinutes)\n| extend LatencyBand=case(AssignmentToExecutionMinutes < 15, \"Under 15 minutes\", AssignmentToExecutionMinutes < 30, \"15-30 minutes\", AssignmentToExecutionMinutes < 60, \"30-60 minutes\", AssignmentToExecutionMinutes < 120, \"1-2 hours\", AssignmentToExecutionMinutes < 240, \"2-4 hours\", AssignmentToExecutionMinutes < 480, \"4-8 hours\", \"Over 8 hours\"), SortOrder=case(AssignmentToExecutionMinutes < 15, 1, AssignmentToExecutionMinutes < 30, 2, AssignmentToExecutionMinutes < 60, 3, AssignmentToExecutionMinutes < 120, 4, AssignmentToExecutionMinutes < 240, 5, AssignmentToExecutionMinutes < 480, 6, 7)\n| summarize Devices=count(), SortOrder=min(SortOrder) by LatencyBand\n| order by SortOrder asc\n| project LatencyBand, Devices",
+        "size": 0,
+        "title": "Device distribution by deployment latency",
+        "timeContextFromParameter": "TimeRange",
+        "exportToExcelOptions": "all",
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "visualization": "barchart"
+      },
+      "name": "latency-distribution"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "IntuneDeploymentTelemetry_CL\n| summarize arg_min(FirstExecutionTimestampUtc, *) by AzureAdDeviceId\n| where isnotnull(AssignmentToExecutionMinutes)\n| summarize P50Minutes=round(percentile(AssignmentToExecutionMinutes, 50), 1), P95Minutes=round(percentile(AssignmentToExecutionMinutes, 95), 1), P99Minutes=round(percentile(AssignmentToExecutionMinutes, 99), 1) by bin(AssignmentTimestampUtc, 1d)\n| order by AssignmentTimestampUtc asc",
+        "size": 0,
+        "title": "Daily deployment latency trend",
+        "timeContextFromParameter": "TimeRange",
+        "exportToExcelOptions": "all",
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "visualization": "timechart"
+      },
+      "name": "daily-latency-trend"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "IntuneDeploymentTelemetry_CL\n| summarize arg_min(FirstExecutionTimestampUtc, *) by AzureAdDeviceId\n| where isnotnull(AssignmentToExecutionMinutes)\n| extend BootAfterAssignment=LastBootTimeUtc > AssignmentTimestampUtc, MdmSyncAfterAssignment=LastKnownMDMSync >= AssignmentTimestampUtc\n| extend LikelyCause=case(BootAfterAssignment and UptimeHours < 2, \"Device was likely offline\", MdmSyncAfterAssignment and EstimatedMDMCheckInCycles > 1, \"Multiple MDM cycles before execution\", not(MdmSyncAfterAssignment), \"No local MDM activity after assignment\", \"Requires event-level review\")\n| summarize Devices=count() by LikelyCause\n| order by Devices desc",
+        "size": 0,
+        "title": "Likely cause of delayed execution",
+        "timeContextFromParameter": "TimeRange",
+        "exportToExcelOptions": "all",
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "visualization": "piechart"
+      },
+      "name": "delay-causes"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "IntuneDeploymentTelemetry_CL\n| summarize arg_min(FirstExecutionTimestampUtc, *) by AzureAdDeviceId\n| project DeviceName, AzureAdDeviceId, AssignmentTimestampUtc, FirstExecutionTimestampUtc, AssignmentToExecutionMinutes, LastBootTimeUtc, UptimeHours, LastKnownMDMSync, EstimatedMDMCheckInCycles, MDMCheckInCycleMethod, MDMEventsTruncated, MDMCycleEventsTruncated, ScriptVersion, ErrorsTruncatedCount\n| order by AssignmentToExecutionMinutes desc",
+        "size": 0,
+        "title": "Per-device deployment evidence",
+        "timeContextFromParameter": "TimeRange",
+        "exportToExcelOptions": "all",
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "visualization": "table"
+      },
+      "name": "device-evidence"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "IntuneDeploymentTelemetry_CL\n| where array_length(Errors) > 0\n| mv-expand Error=Errors\n| summarize Devices=dcount(AzureAdDeviceId), Occurrences=count() by Operation=tostring(Error.Operation), Message=tostring(Error.Message)\n| order by Occurrences desc",
+        "size": 0,
+        "title": "Endpoint collection errors",
+        "timeContextFromParameter": "TimeRange",
+        "exportToExcelOptions": "all",
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "visualization": "table"
+      },
+      "name": "collection-errors"
+    },
+    {
+      "type": 1,
+      "content": {
+        "json": "## Interpretation notes\n\n- Each visualization keeps only the first execution observed for each Entra device ID in the selected period.\n- `EstimatedMDMCheckInCycles` is derived from bounded local event evidence and is not a service-side Intune counter.\n- A missing device cannot appear in telemetry; compare the reached-device count with the intended Intune assignment population.\n- Direct-ingestion POC data is endpoint asserted and demonstrates transport and timing, not strong device identity."
+      },
+      "name": "interpretation-notes"
+    }
+  ],
+  "isLocked": false,
+  "fallbackResourceIds": [
+    "__WORKSPACE_RESOURCE_ID__"
+  ]
+}
