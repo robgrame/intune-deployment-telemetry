@@ -13,6 +13,7 @@ coverage/
 local.settings.json
 appsettings.Local.json
 .env
+.local/
 *.pfx
 *.p12
 *.pem
