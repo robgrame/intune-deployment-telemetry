@@ -47,7 +47,8 @@ requires stronger isolation.
 
 ## Design principles
 
-- No Azure credential is distributed to endpoints.
+- No Azure credential is distributed to endpoints in broker profiles. The
+  `poc` direct-ingestion profile is an explicit documented exception.
 - Every device receives a unique, renewable client certificate.
 - Endpoint fields are untrusted until validated by the broker.
 - Azure Monitor access uses managed identity and least-privilege DCR scope.

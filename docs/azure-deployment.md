@@ -32,8 +32,8 @@ Use the deployment script for every profile:
 ```
 
 For a short-lived constrained pilot, create the dedicated App Registration
-and service principal first, then expose its **service principal object ID**
-to Bicep:
+and service principal first. Add a short-lived client secret to the App
+Registration, then expose its **service principal object ID** to Bicep:
 
 ```powershell
 .\scripts\deployment\Deploy-IntuneTelemetry.ps1 `
@@ -46,6 +46,10 @@ The Proof of Concept (`poc`) profile creates only the workspace, custom table,
 direct DCR, and DCR-scoped role assignment. If the object ID is missing, the
 The service principal object ID is mandatory for `poc`; the script stops
 before deployment if it isn't supplied.
+
+The Bicep deployment never receives or stores the client secret. Configure it
+only in the signed Intune Platform Script and revoke it immediately when the
+experiment ends.
 
 Use `-WhatIfOnly` to validate and preview any profile without changing Azure.
 Use `-Subscription` when the active Azure CLI subscription isn't the intended

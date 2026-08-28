@@ -45,8 +45,8 @@ flowchart LR
 In `dev`, `prod`, and `premium`, the endpoint never receives a workspace key,
 app secret, or Azure token. Azure access is confined to the broker's
 system-assigned managed identity, scoped to the Data Collection Rule. The
-`poc` profile is an explicit direct-ingestion exception using a dedicated
-application certificate.
+`poc` profile is an explicit direct-ingestion exception using a short-lived
+application secret embedded in the pilot script.
 
 Runtime settings are centralized under the `IntuneTelemetry:` prefix in Azure
 App Configuration. Trust material and future secrets are stored in Key Vault
@@ -70,8 +70,8 @@ Read the [architecture](docs/architecture.md) and
 
 The `dev`, `prod`, and `premium` broker profiles enforce HTTPS, TLS 1.2+,
 mTLS, managed identity, protected storage, bounded requests, and centralized
-logging. The `poc` profile intentionally replaces those broker controls with
-a dedicated endpoint-held application certificate and DCR-scoped RBAC.
+logging. The `poc` profile intentionally replaces those broker controls with a
+short-lived endpoint-held application secret and DCR-scoped RBAC.
 Certificate revocation checking in broker profiles is intentionally disabled
 because private CA CRL/OCSP endpoints might not be reachable from Azure.
 
@@ -117,9 +117,9 @@ parameters.
 
 The `poc` (**Proof of Concept**) profile deploys only Log Analytics, the custom
 table, a direct DCR, and DCR-scoped RBAC for an existing App Registration.
-Pilot clients authenticate with a separate shared application certificate.
-This removes the broker security boundary and must not be promoted to
-production. See the
+Pilot clients authenticate with a short-lived shared client secret embedded
+in the Platform Script. This removes the broker security boundary and must not
+be promoted to production. See the
 [Proof of Concept direct-ingestion plan](docs/poc-direct-ingestion.md).
 
 ### 3. Deploy the broker
