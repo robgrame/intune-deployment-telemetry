@@ -1,19 +1,24 @@
 # 🖥️ Intune deployment
 
-## 1. Deploy certificate trust
+## Broker profiles: deploy certificate trust
 
 1. Create a Trusted certificate profile containing the issuing root CA.
 2. Assign it to the telemetry device group.
 3. Confirm the root is present on pilot devices.
 
-## 2. Deploy the client certificate
+## Broker profiles: deploy the client certificate
 
 Create a device SCEP/PKCS profile as described in
 [certificate authentication](certificate-authentication.md). Require Client
 Authentication EKU and a non-exportable private key. The subject format is an
 organizational choice; authorization is based on the immediate issuing CA.
 
-## 3. Configure the script
+These two certificate sections apply only to `dev`, `prod`, and `premium`.
+For `poc`, do **not** deploy a trusted-root or client-certificate profile. The
+absence of a prior device prerequisite is intentional and necessary to
+measure Platform Script delivery latency.
+
+## Configure the script
 
 For `dev`, `prod`, and `premium`, configure broker mode:
 
@@ -30,20 +35,20 @@ For the minimal Proof of Concept profile, configure direct mode:
 
 ```powershell
 $UploadMode = 'DirectLogs'
+$AssignmentTimestampUtc = '2026-08-28T08:00:00Z'
 $DirectTenantId = '<tenant-guid>'
 $DirectClientId = '<app-registration-client-id>'
+$DirectClientSecret = '<app-registration-client-secret>'
 $DirectLogsIngestionEndpoint = 'https://<dcr-endpoint>'
 $DirectDcrImmutableId = 'dcr-<immutable-id>'
 $DirectStreamName = 'Custom-IntuneDeploymentTelemetry'
-$DirectApplicationCertificateSha256Thumbprint = '<64-character-SHA256-fingerprint>'
 $DirectIncludeSensitiveData = $false
 ```
 
-The direct-mode certificate is an application credential created only for the
-Proof of Concept. It must be present with its RSA private key in
-`LocalMachine\My`. The script selects it only by the configured SHA-256
-fingerprint; it does not reuse or discover the normal telemetry mTLS
-certificate.
+The direct-mode client secret is created only for the Proof of Concept and is
+authorized through RBAC only on its DCR. Embedding it removes any certificate
+deployment prerequisite, but anyone who can read the script can use the same
+application identity until the credential is revoked or expires.
 
 Direct mode omits UPN, the interactive username, and raw MDM event messages by
 default. Set `DirectIncludeSensitiveData` to `$true` only after an explicit
@@ -52,7 +57,7 @@ privacy review.
 Increment `Major.Minor.Build`, sign the final file, and don't modify it after
 signing.
 
-## 4. Create the Platform Script
+## Create the Platform Script
 
 | Intune setting | Value |
 |---|---|
@@ -60,16 +65,28 @@ signing.
 | Enforce script signature check | Yes |
 | Run script in 64-bit PowerShell host | Yes |
 
-Assign the script to the same pilot device group only after certificates are
-available.
+For broker profiles, assign the script only after the certificates are
+available. For `poc`, assign the script directly to the disposable POC device
+group without any certificate prerequisite.
 
-## 5. Validate
+## Validate broker profiles
 
 - Function broker returns `202`.
 - Intune reports script success.
 - `IntuneDeploymentTelemetry_CL` receives the device record.
 - Selected certificate chains through an authorized issuer fingerprint.
 - Application Insights contains no payload body or UPN.
+
+## Validate the POC profile
+
+- The direct DCR endpoint returns `204`.
+- `IntuneDeploymentTelemetry_CL` receives the device record.
+- `ClientCertificateThumbprint` and
+  `ClientCertificateIssuerThumbprint` are empty.
+- The App Registration has only **Monitoring Metrics Publisher** on the POC
+  DCR.
+- UPN, interactive username, and raw event messages are absent while
+  `DirectIncludeSensitiveData` remains `$false`.
 
 Platform Scripts normally execute once after success. Use Remediations for
 periodic telemetry rather than forcing a successful Platform Script to rerun.

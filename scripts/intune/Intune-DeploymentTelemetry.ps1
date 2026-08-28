@@ -8,12 +8,13 @@ Collects local Windows and MDM telemetry for Intune deployment-latency analysis.
 .DESCRIPTION
 Designed for Microsoft Intune Platform Scripts running as SYSTEM in a 64-bit
 Windows PowerShell host. The first execution timestamp and correlation ID are
-written once to HKLM and never overwritten. Each execution is sent over mutual
-TLS to the authenticated Azure broker included in this repository.
+written once to HKLM and never overwritten.
 
-Intune Platform Scripts don't accept runtime parameters. Configure the block
-below before signing and uploading this file. No Azure credential is stored on
-the endpoint.
+Broker mode sends telemetry over mutual TLS without storing Azure credentials
+on the endpoint. DirectLogs is a Proof of Concept mode that embeds a live
+Microsoft Entra client secret in the configuration block and sends directly
+to an Azure Monitor DCR. Treat every configured DirectLogs copy as a secret
+artifact: never commit it and revoke the credential when the POC ends.
 #>
 
 #region Configuration - set these values before signing and uploading to Intune
@@ -25,10 +26,10 @@ $TrustedIssuerCaSha256Thumbprints = @(
 )
 $DirectTenantId = '<ENTRA-TENANT-ID>'
 $DirectClientId = '<APP-REGISTRATION-CLIENT-ID>'
+$DirectClientSecret = '<APP-REGISTRATION-CLIENT-SECRET>'
 $DirectLogsIngestionEndpoint = 'https://<DCR-LOGS-INGESTION-ENDPOINT>'
 $DirectDcrImmutableId = '<DCR-IMMUTABLE-ID>'
 $DirectStreamName = 'Custom-IntuneDeploymentTelemetry'
-$DirectApplicationCertificateSha256Thumbprint = '<APPLICATION-CERTIFICATE-SHA256-THUMBPRINT>'
 $DirectIncludeSensitiveData = $false
 $EventLookbackHours = 72
 $MaximumMdmEvents = 20
@@ -41,7 +42,7 @@ Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
-$ScriptVersion = '1.3.5'
+$ScriptVersion = '1.4.6'
 $RegistryPath = 'HKLM:\SOFTWARE\Bigfix Tags\IntuneDeploymentTelemetry'
 $LogDirectory = Join-Path $env:ProgramData 'IntuneDeploymentTelemetry'
 $TranscriptPath = $null
@@ -794,121 +795,6 @@ function Get-TelemetryClientCertificate {
     return $certificates[0]
 }
 
-function ConvertTo-Base64Url {
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory)]
-        [byte[]]$Bytes
-    )
-
-    return [Convert]::ToBase64String($Bytes).TrimEnd('=').Replace('+', '-').Replace('/', '_')
-}
-
-function Get-DirectIngestionCertificate {
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory)]
-        [string]$Sha256Thumbprint
-    )
-
-    $normalizedThumbprint = ($Sha256Thumbprint -replace '[^0-9A-Fa-f]', '').ToUpperInvariant()
-    if ($normalizedThumbprint -notmatch '^[0-9A-F]{64}$') {
-        throw 'DirectApplicationCertificateSha256Thumbprint must contain 64 hexadecimal characters.'
-    }
-
-    $now = [datetime]::UtcNow
-    $matches = @(
-        Get-ChildItem -LiteralPath 'Cert:\LocalMachine\My' |
-            Where-Object {
-                $_.HasPrivateKey -and
-                $_.NotBefore.ToUniversalTime() -le $now -and
-                $_.NotAfter.ToUniversalTime() -gt $now -and
-                (Get-CertificateSha256Thumbprint -Certificate $_) -eq $normalizedThumbprint
-            }
-    )
-
-    if ($matches.Count -ne 1) {
-        throw "Expected exactly one valid direct-ingestion certificate with SHA-256 fingerprint $normalizedThumbprint in LocalMachine\My; found $($matches.Count)."
-    }
-
-    $rsa = [Security.Cryptography.X509Certificates.RSACertificateExtensions]::GetRSAPrivateKey(
-        $matches[0]
-    )
-    if ($null -eq $rsa) {
-        throw 'The direct-ingestion application certificate must contain an RSA private key.'
-    }
-    $rsa.Dispose()
-
-    return $matches[0]
-}
-
-function New-DirectIngestionClientAssertion {
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory)]
-        [Security.Cryptography.X509Certificates.X509Certificate2]$Certificate,
-
-        [Parameter(Mandatory)]
-        [guid]$ClientId,
-
-        [Parameter(Mandatory)]
-        [uri]$TokenEndpoint
-    )
-
-    $now = [DateTimeOffset]::UtcNow
-    $sha256 = [Security.Cryptography.SHA256]::Create()
-    try {
-        $certificateHash = $sha256.ComputeHash($Certificate.RawData)
-    }
-    finally {
-        $sha256.Dispose()
-    }
-    $header = [ordered]@{
-        alg        = 'RS256'
-        typ        = 'JWT'
-        'x5t#S256' = ConvertTo-Base64Url -Bytes $certificateHash
-    }
-    $claims = [ordered]@{
-        aud = $TokenEndpoint.AbsoluteUri
-        iss = $ClientId.ToString()
-        sub = $ClientId.ToString()
-        jti = [guid]::NewGuid().ToString()
-        nbf = $now.AddMinutes(-1).ToUnixTimeSeconds()
-        exp = $now.AddMinutes(5).ToUnixTimeSeconds()
-    }
-
-    $encodedHeader = ConvertTo-Base64Url -Bytes (
-        [Text.Encoding]::UTF8.GetBytes(
-            (ConvertTo-Json -InputObject $header -Compress)
-        )
-    )
-    $encodedClaims = ConvertTo-Base64Url -Bytes (
-        [Text.Encoding]::UTF8.GetBytes(
-            (ConvertTo-Json -InputObject $claims -Compress)
-        )
-    )
-    $unsignedAssertion = "$encodedHeader.$encodedClaims"
-    $rsa = [Security.Cryptography.X509Certificates.RSACertificateExtensions]::GetRSAPrivateKey(
-        $Certificate
-    )
-    if ($null -eq $rsa) {
-        throw 'The direct-ingestion application certificate does not expose an RSA private key.'
-    }
-
-    try {
-        $signature = $rsa.SignData(
-            [Text.Encoding]::ASCII.GetBytes($unsignedAssertion),
-            [Security.Cryptography.HashAlgorithmName]::SHA256,
-            [Security.Cryptography.RSASignaturePadding]::Pkcs1
-        )
-    }
-    finally {
-        $rsa.Dispose()
-    }
-
-    return "$unsignedAssertion.$(ConvertTo-Base64Url -Bytes $signature)"
-}
-
 function Get-DirectIngestionAccessToken {
     [CmdletBinding()]
     param(
@@ -919,7 +805,8 @@ function Get-DirectIngestionAccessToken {
         [guid]$ClientId,
 
         [Parameter(Mandatory)]
-        [Security.Cryptography.X509Certificates.X509Certificate2]$Certificate,
+        [ValidateNotNullOrEmpty()]
+        [string]$ClientSecret,
 
         [Parameter(Mandatory)]
         [int]$TimeoutSeconds
@@ -928,14 +815,11 @@ function Get-DirectIngestionAccessToken {
     $tokenEndpoint = [uri](
         'https://login.microsoftonline.com/{0}/oauth2/v2.0/token' -f $TenantId
     )
-    $assertion = New-DirectIngestionClientAssertion -Certificate $Certificate `
-        -ClientId $ClientId -TokenEndpoint $tokenEndpoint
     $tokenRequest = @{
-        client_id             = $ClientId.ToString()
-        scope                 = 'https://monitor.azure.com//.default'
-        client_assertion_type = 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer'
-        client_assertion      = $assertion
-        grant_type            = 'client_credentials'
+        client_id     = $ClientId.ToString()
+        client_secret = $ClientSecret
+        scope         = 'https://monitor.azure.com//.default'
+        grant_type    = 'client_credentials'
     }
 
     $response = Invoke-RestMethod -Uri $tokenEndpoint -Method Post `
@@ -1039,7 +923,8 @@ function Send-TelemetryDirectData {
         [guid]$ClientId,
 
         [Parameter(Mandatory)]
-        [Security.Cryptography.X509Certificates.X509Certificate2]$Certificate,
+        [ValidateNotNullOrEmpty()]
+        [string]$ClientSecret,
 
         [Parameter(Mandatory)]
         [byte[]]$Body,
@@ -1065,7 +950,7 @@ function Send-TelemetryDirectData {
         $lastAttempt = $attempt
         try {
             $accessToken = Get-DirectIngestionAccessToken -TenantId $TenantId `
-                -ClientId $ClientId -Certificate $Certificate `
+                -ClientId $ClientId -ClientSecret $ClientSecret `
                 -TimeoutSeconds $TimeoutSeconds
             $headers = @{
                 Authorization = "Bearer $accessToken"
@@ -1122,9 +1007,6 @@ function ConvertTo-DirectIngestionPayload {
         [Collections.IDictionary]$Payload,
 
         [Parameter(Mandatory)]
-        [Security.Cryptography.X509Certificates.X509Certificate2]$Certificate,
-
-        [Parameter(Mandatory)]
         [bool]$IncludeSensitiveData
     )
 
@@ -1141,10 +1023,7 @@ function ConvertTo-DirectIngestionPayload {
         (ConvertTo-UtcIso8601 -Value ([datetime]::UtcNow))
     )
     $Payload.Add('BrokerRequestId', $Payload.ExecutionId)
-    $Payload.Add(
-        'ClientCertificateThumbprint',
-        (Get-CertificateSha256Thumbprint -Certificate $Certificate)
-    )
+    $Payload.Add('ClientCertificateThumbprint', $null)
     $Payload.Add('ClientCertificateIssuerThumbprint', $null)
     return $Payload
 }
@@ -1418,6 +1297,11 @@ try {
             if ($DirectStreamName -notmatch '^Custom-[A-Za-z][A-Za-z0-9_]{0,127}$') {
                 throw 'DirectStreamName must be a valid custom DCR stream name.'
             }
+            if ([string]::IsNullOrWhiteSpace($DirectClientSecret) -or
+                $DirectClientSecret -eq '<APP-REGISTRATION-CLIENT-SECRET>' -or
+                $DirectClientSecret.Length -gt 4096) {
+                throw 'Configure DirectClientSecret with the POC App Registration secret.'
+            }
         }
     }
     $assignmentValue = [Nullable[datetime]]$parsedAssignment.UtcDateTime
@@ -1448,10 +1332,7 @@ try {
                 -RequestId ([guid]$payload.ExecutionId)
         }
         else {
-            $certificate = Get-DirectIngestionCertificate `
-                -Sha256Thumbprint $DirectApplicationCertificateSha256Thumbprint
             $payload = ConvertTo-DirectIngestionPayload -Payload $payload `
-                -Certificate $certificate `
                 -IncludeSensitiveData $DirectIncludeSensitiveData
             $directJson = ConvertTo-Json -InputObject @($payload) -Depth 8 -Compress
             $body = [Text.Encoding]::UTF8.GetBytes($directJson)
@@ -1461,7 +1342,7 @@ try {
                 -StreamName $DirectStreamName `
                 -TenantId $parsedTenantId `
                 -ClientId $parsedClientId `
-                -Certificate $certificate `
+                -ClientSecret $DirectClientSecret `
                 -Body $body `
                 -RetryCount $UploadRetryCount `
                 -TimeoutSeconds $UploadTimeoutSeconds

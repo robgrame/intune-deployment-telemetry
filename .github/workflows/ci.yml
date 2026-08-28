@@ -55,9 +55,13 @@ jobs:
             }
           }
 
-      - name: Test direct-ingestion client assertion
+      - name: Test direct-ingestion payload
         shell: pwsh
-        run: .\tests\powershell\Test-DirectIngestionClientAssertion.ps1
+        run: .\tests\powershell\Test-DirectIngestionPayload.ps1
+
+      - name: Verify secret placeholders
+        shell: pwsh
+        run: .\tests\powershell\Test-TrackedScriptPlaceholders.ps1
 
       - name: Build Bicep
         shell: pwsh

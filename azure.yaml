@@ -1,6 +1,6 @@
 name: intune-deployment-telemetry
 metadata:
-  template: intune-deployment-telemetry@1.1.0
+  template: intune-deployment-telemetry@1.2.0
 services:
   broker:
     project: ./src/Intune.Telemetry.Broker
