@@ -59,6 +59,10 @@ jobs:
         shell: pwsh
         run: .\tests\powershell\Test-DirectIngestionPayload.ps1
 
+      - name: Test POC script template
+        shell: powershell
+        run: .\tests\powershell\Test-PocScriptTemplate.ps1
+
       - name: Verify secret placeholders
         shell: pwsh
         run: .\tests\powershell\Test-TrackedScriptPlaceholders.ps1

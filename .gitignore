@@ -14,6 +14,8 @@ local.settings.json
 appsettings.Local.json
 .env
 .local/
+*.generated.ps1
+*.secret.txt
 *.pfx
 *.p12
 *.pem
