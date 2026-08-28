@@ -15,7 +15,9 @@ be changed from the workbook's **Analysis window** selector.
 - cumulative devices reached over time;
 - device distribution across latency bands;
 - daily percentile trend;
-- likely delay classification from boot and local MDM evidence;
+- likely delay classification from boot, MDM, and workload-specific IME
+  evidence;
+- PowerShell policy polling and empty-response counts since assignment;
 - per-device records that can be exported to Excel;
 - endpoint collection errors.
 
@@ -35,16 +37,30 @@ assignment timestamp supplied by the deployment process.
 The daily trend chart requires multiple distinct assignment timestamps. A
 single-assignment POC produces one valid data point rather than a trend line.
 
-The likely-cause chart is evidence-based rather than authoritative:
+The likely-cause chart uses the endpoint classification:
 
-- a boot after assignment with low uptime suggests that the device was
-  offline;
-- multiple local MDM cycles suggest delivery required more than one check-in;
-- no local MDM activity after assignment suggests the device did not check in;
-- remaining devices require event-level investigation.
+- `ProbablyOfflineBeforeBoot` means the last boot occurred after assignment;
+- `ProbablyOfflineOrDisconnected` means neither MDM nor IME activity was found
+  in a completely covered interval;
+- `OnlineWithoutPowerShellPolling` means other management activity was present
+  but the PowerShell workload did not request policies;
+- `PowerShellPollingPolicyNotReturned` means polling occurred but Intune did
+  not return the target policy;
+- `PolicyLifecycleObservedWithoutReceiptMarker` means processing or execution
+  was found even though the response marker was unavailable;
+- `PolicyDeliveredThenExecutedPromptly` separates service/polling delay from
+  execution delay;
+- `InsufficientEvidence` is used whenever retained logs do not cover the
+  complete interval or a log could not be parsed.
 
 `EstimatedMDMCheckInCycles` is derived from bounded local Windows events and
-is not an Intune service-side counter.
+is not an Intune service-side counter. IME parsing includes the active
+`IntuneManagementExtension.log` and `AgentExecutor.log` files and all retained
+rotated copies. Only bounded timestamps and counters are uploaded; policy
+payloads, script content, stdout, and stderr are not retained. Coverage is
+tracked separately for the management and AgentExecutor log families so a
+longer retention period in one family cannot hide missing evidence in the
+other.
 
 ## Infrastructure source
 

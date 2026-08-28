@@ -15,6 +15,7 @@ if ($parseErrors.Count -gt 0) {
 }
 
 $expectedValues = @{
+    IntunePolicyId               = '<INTUNE-POLICY-ID>'
     DirectTenantId              = '<ENTRA-TENANT-ID>'
     DirectClientId              = '<APP-REGISTRATION-CLIENT-ID>'
     DirectClientSecret          = '<APP-REGISTRATION-CLIENT-SECRET>'

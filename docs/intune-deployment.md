@@ -26,6 +26,7 @@ For `dev`, `prod`, and `premium`, configure broker mode:
 $UploadMode = 'Broker'
 $BrokerUri = 'https://<function-app-hostname>/api/telemetry'
 $AssignmentTimestampUtc = '2026-08-27T15:00:00Z'
+$IntunePolicyId = '<device-management-script-guid>'
 $TrustedIssuerCaSha256Thumbprints = @(
     '<64-character-SHA256-fingerprint>'
 )
@@ -36,6 +37,7 @@ For the minimal Proof of Concept profile, configure direct mode:
 ```powershell
 $UploadMode = 'DirectLogs'
 $AssignmentTimestampUtc = '2026-08-28T08:00:00Z'
+$IntunePolicyId = '<device-management-script-guid>'
 $DirectTenantId = '<tenant-guid>'
 $DirectClientId = '<app-registration-client-id>'
 $DirectClientSecret = '<APP-REGISTRATION-CLIENT-SECRET>'
@@ -62,16 +64,22 @@ Store the actual secret in the adjacent ignored file:
 
 `scripts\intune\poc\Intune-DeploymentTelemetry-POC.secret.txt`
 
-Generate the single-file Platform Script immediately before assignment:
+Create and save the unassigned Platform Script first, then copy its Intune
+`deviceManagementScript.id`. Generate the final single-file Platform Script
+immediately before updating and assigning that existing policy:
 
 ```powershell
-.\scripts\intune\poc\New-ConfiguredPocPlatformScript.ps1
+.\scripts\intune\poc\New-ConfiguredPocPlatformScript.ps1 `
+  -IntunePolicyId '<device-management-script-guid>'
 ```
 
 The generator stamps the current UTC time by default. Run it immediately
 before uploading and assigning the script. Use `-AssignmentTimestampUtc` only
 to reproduce a controlled test with an explicit ISO 8601 timestamp, such as
 `2026-08-28T08:00:00Z`. The generator prints the exact UTC value it stamped.
+The script also detects the Policy ID from IME's temporary
+`<AccountId>_<PolicyId>.ps1` path and reports whether it matches the configured
+value.
 
 Upload `Intune-DeploymentTelemetry-POC.generated.ps1`. Intune Platform Scripts
 don't deploy adjacent files, so the generated file contains the secret and
@@ -115,6 +123,9 @@ group without any certificate prerequisite.
   DCR.
 - UPN, interactive username, and raw event messages are absent while
   `DirectIncludeSensitiveData` remains `$false`.
+- IME evidence reports the PowerShell polling count, empty responses, target
+  policy receipt, execution identification, active/rotated log coverage, and
+  the configured/detected Policy ID match.
 
 Platform Scripts normally execute once after success. Use Remediations for
 periodic telemetry rather than forcing a successful Platform Script to rerun.

@@ -14,13 +14,16 @@
 Intune reports when a script or policy reaches a device, but that timestamp
 alone doesn't explain *why* delivery was late. This project correlates the
 first endpoint execution with boot time, uptime, local MDM activity,
-EnterpriseMgmt tasks, and DMEDP events.
+EnterpriseMgmt tasks, DMEDP events, and active plus rotated Intune Management
+Extension logs.
 
 | Question | Evidence |
 |---|---|
 | Did the device receive the script late? | Assignment and immutable first-execution timestamps |
 | Was the device offline? | Boot time, uptime, and last local MDM activity |
 | How many MDM cycles elapsed? | Correlated DMEDP activity IDs and bounded event clustering |
+| How many times did IME request Platform Scripts? | PowerShell workload request markers across active and rotated IME logs |
+| Was the policy received but execution delayed? | Target-policy response and AgentExecutor launch timestamps |
 | Is the delay tenant-wide? | P50, P95, and P99 KQL queries |
 | Can endpoints write directly to Azure Monitor? | Only in the constrained `poc`; supported profiles use the broker |
 

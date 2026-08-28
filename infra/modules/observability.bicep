@@ -106,6 +106,122 @@ var telemetryColumns = [
     type: 'real'
   }
   {
+    name: 'ConfiguredIntunePolicyId'
+    type: 'string'
+  }
+  {
+    name: 'DetectedIntunePolicyId'
+    type: 'string'
+  }
+  {
+    name: 'IntunePolicyIdMatchStatus'
+    type: 'string'
+  }
+  {
+    name: 'IMEPolicyPollCountSinceAssignment'
+    type: 'int'
+  }
+  {
+    name: 'IMEEmptyPolicyResponseCount'
+    type: 'int'
+  }
+  {
+    name: 'IMEDeviceCheckInCountSinceAssignment'
+    type: 'int'
+  }
+  {
+    name: 'IMEGenericWorkloadCheckInCount'
+    type: 'int'
+  }
+  {
+    name: 'IMEPolicyPollTimestampsUtc'
+    type: 'dynamic'
+  }
+  {
+    name: 'IMEPolicyPollTimestampsTruncated'
+    type: 'boolean'
+  }
+  {
+    name: 'IMEPolicyReceivedUtc'
+    type: 'datetime'
+  }
+  {
+    name: 'IMEPolicyProcessingUtc'
+    type: 'datetime'
+  }
+  {
+    name: 'IMEScriptMaterializedUtc'
+    type: 'datetime'
+  }
+  {
+    name: 'IMEExecutionIdentifiedUtc'
+    type: 'datetime'
+  }
+  {
+    name: 'AssignmentToIMEExecutionMinutes'
+    type: 'real'
+  }
+  {
+    name: 'IMEPolicyToExecutionSeconds'
+    type: 'real'
+  }
+  {
+    name: 'IMELogOldestRetainedUtc'
+    type: 'datetime'
+  }
+  {
+    name: 'IMELogNewestRetainedUtc'
+    type: 'datetime'
+  }
+  {
+    name: 'IMEManagementLogOldestRetainedUtc'
+    type: 'datetime'
+  }
+  {
+    name: 'IMEManagementLogNewestRetainedUtc'
+    type: 'datetime'
+  }
+  {
+    name: 'IMEAgentLogOldestRetainedUtc'
+    type: 'datetime'
+  }
+  {
+    name: 'IMEAgentLogNewestRetainedUtc'
+    type: 'datetime'
+  }
+  {
+    name: 'IMEManagementLogCoverageStatus'
+    type: 'string'
+  }
+  {
+    name: 'IMEAgentLogCoverageStatus'
+    type: 'string'
+  }
+  {
+    name: 'IMELogFilesAnalyzed'
+    type: 'int'
+  }
+  {
+    name: 'IMELogFilesFailed'
+    type: 'int'
+  }
+  {
+    name: 'IMELogCoverageStatus'
+    type: 'string'
+  }
+  {
+    name: 'IMELogEvidenceTruncated'
+    type: 'boolean'
+  }
+  {
+    name: 'DeploymentDelayClassification'
+    type: 'string'
+  }
+  {
+    name: 'DeploymentDelayConfidence'
+    type: 'string'
+  }
+  {
     name: 'LastBootTimeUtc'
     type: 'datetime'
   }
@@ -275,6 +391,9 @@ resource dataCollectionRule 'Microsoft.Insights/dataCollectionRules@2023-03-11' 
   location: location
   tags: tags
   kind: 'Direct'
+  dependsOn: [
+    telemetryTable
+  ]
   properties: {
     dataCollectionEndpointId: deployDataCollectionEndpoint ? dataCollectionEndpoint.id : null
     streamDeclarations: {

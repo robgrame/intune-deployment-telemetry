@@ -31,7 +31,14 @@ IntuneDeploymentTelemetry_CL
     UptimeHours,
     LastKnownMDMSync,
     EstimatedMDMCheckInCycles,
-    MDMCheckInCycleMethod
+    MDMCheckInCycleMethod,
+    IMEPolicyPollCountSinceAssignment,
+    IMEEmptyPolicyResponseCount,
+    IMEPolicyReceivedUtc,
+    IMEExecutionIdentifiedUtc,
+    IMEPolicyToExecutionSeconds,
+    DeploymentDelayClassification,
+    DeploymentDelayConfidence
 | order by AssignmentToExecutionMinutes desc
 ```
 
@@ -48,25 +55,38 @@ IntuneDeploymentTelemetry_CL
     P99Minutes=percentile(AssignmentToExecutionMinutes, 99)
 ```
 
-## Device availability classification
+## Device availability and delivery classification
 
 ```kusto
 IntuneDeploymentTelemetry_CL
 | summarize arg_min(FirstExecutionTimestampUtc, *) by AzureAdDeviceId
 | where isnotnull(AssignmentToExecutionMinutes)
-| extend
-    BootAfterAssignment = LastBootTimeUtc > AssignmentTimestampUtc,
-    MdmSyncAfterAssignment = LastKnownMDMSync >= AssignmentTimestampUtc
-| extend LikelyCause = case(
-    BootAfterAssignment and UptimeHours < 2,
-        "Device was likely offline",
-    MdmSyncAfterAssignment and EstimatedMDMCheckInCycles > 1,
-        "Multiple MDM cycles before execution",
-    not(MdmSyncAfterAssignment),
-        "No local MDM activity after assignment",
-    "Requires event-level review")
-| summarize Devices=count() by LikelyCause
+| summarize Devices=count() by
+    DeploymentDelayClassification,
+    DeploymentDelayConfidence
 | order by Devices desc
+```
+
+## IME PowerShell policy polling
+
+```kusto
+IntuneDeploymentTelemetry_CL
+| summarize arg_min(FirstExecutionTimestampUtc, *) by AzureAdDeviceId
+| project
+    DeviceName,
+    AssignmentTimestampUtc,
+    IMEPolicyPollCountSinceAssignment,
+    IMEEmptyPolicyResponseCount,
+    IMEDeviceCheckInCountSinceAssignment,
+    IMEGenericWorkloadCheckInCount,
+    IMEPolicyReceivedUtc,
+    IMEExecutionIdentifiedUtc,
+    IMEPolicyToExecutionSeconds,
+    IMEManagementLogCoverageStatus,
+    IMEAgentLogCoverageStatus,
+    IMELogCoverageStatus,
+    IMELogEvidenceTruncated
+| order by IMEPolicyPollCountSinceAssignment desc
 ```
 
 ## MDM cycle distribution
