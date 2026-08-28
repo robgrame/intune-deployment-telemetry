@@ -126,7 +126,7 @@
       "type": 3,
       "content": {
         "version": "KqlItem/1.0",
-        "query": "IntuneDeploymentTelemetry_CL\n| summarize arg_min(FirstExecutionTimestampUtc, *) by AzureAdDeviceId\n| where isnotnull(AssignmentToExecutionMinutes)\n| extend BootAfterAssignment=LastBootTimeUtc > AssignmentTimestampUtc, MdmSyncAfterAssignment=LastKnownMDMSync >= AssignmentTimestampUtc\n| extend LikelyCause=case(BootAfterAssignment and UptimeHours < 2, \"Device was likely offline\", MdmSyncAfterAssignment and EstimatedMDMCheckInCycles > 1, \"Multiple MDM cycles before execution\", not(MdmSyncAfterAssignment), \"No local MDM activity after assignment\", \"Requires event-level review\")\n| summarize Devices=count() by LikelyCause\n| order by Devices desc",
+        "query": "IntuneDeploymentTelemetry_CL\n| summarize arg_min(FirstExecutionTimestampUtc, *) by AzureAdDeviceId\n| where isnotnull(AssignmentToExecutionMinutes)\n| summarize Devices=count() by DeploymentDelayClassification, DeploymentDelayConfidence\n| order by Devices desc",
         "size": 0,
         "title": "Likely cause of delayed execution",
         "timeContextFromParameter": "TimeRange",
@@ -141,7 +141,7 @@
       "type": 3,
       "content": {
         "version": "KqlItem/1.0",
-        "query": "IntuneDeploymentTelemetry_CL\n| summarize arg_min(FirstExecutionTimestampUtc, *) by AzureAdDeviceId\n| project DeviceName, AzureAdDeviceId, AssignmentTimestampUtc, FirstExecutionTimestampUtc, AssignmentToExecutionMinutes, LastBootTimeUtc, UptimeHours, LastKnownMDMSync, EstimatedMDMCheckInCycles, MDMCheckInCycleMethod, MDMEventsTruncated, MDMCycleEventsTruncated, ScriptVersion, ErrorsTruncatedCount\n| order by AssignmentToExecutionMinutes desc",
+        "query": "IntuneDeploymentTelemetry_CL\n| summarize arg_min(FirstExecutionTimestampUtc, *) by AzureAdDeviceId\n| project DeviceName, AzureAdDeviceId, AssignmentTimestampUtc, FirstExecutionTimestampUtc, AssignmentToExecutionMinutes, ConfiguredIntunePolicyId, DetectedIntunePolicyId, IntunePolicyIdMatchStatus, IMEPolicyPollCountSinceAssignment, IMEEmptyPolicyResponseCount, IMEPolicyReceivedUtc, IMEExecutionIdentifiedUtc, IMEPolicyToExecutionSeconds, IMEManagementLogCoverageStatus, IMEAgentLogCoverageStatus, IMELogCoverageStatus, IMELogEvidenceTruncated, DeploymentDelayClassification, DeploymentDelayConfidence, LastBootTimeUtc, UptimeHours, LastKnownMDMSync, EstimatedMDMCheckInCycles, MDMCheckInCycleMethod, ScriptVersion, ErrorsTruncatedCount\n| order by AssignmentToExecutionMinutes desc",
         "size": 0,
         "title": "Per-device deployment evidence",
         "timeContextFromParameter": "TimeRange",
@@ -170,7 +170,7 @@
     {
       "type": 1,
       "content": {
-        "json": "## Interpretation notes\n\n- Each visualization keeps only the first execution observed for each Entra device ID in the selected period.\n- `EstimatedMDMCheckInCycles` is derived from bounded local event evidence and is not a service-side Intune counter.\n- A missing device cannot appear in telemetry; compare the reached-device count with the intended Intune assignment population.\n- Direct-ingestion POC data is endpoint asserted and demonstrates transport and timing, not strong device identity."
+        "json": "## Interpretation notes\n\n- Each visualization keeps only the first execution observed for each Entra device ID in the selected period.\n- IME evidence includes all retained active and rotated IntuneManagementExtension and AgentExecutor logs. `InsufficientEvidence` is returned when they do not cover the assignment-to-execution interval.\n- `EstimatedMDMCheckInCycles` is derived from bounded local event evidence and is not a service-side Intune counter.\n- A missing device cannot appear in telemetry; compare the reached-device count with the intended Intune assignment population.\n- Direct-ingestion POC data is endpoint asserted and demonstrates transport and timing, not strong device identity."
       },
       "name": "interpretation-notes"
     }

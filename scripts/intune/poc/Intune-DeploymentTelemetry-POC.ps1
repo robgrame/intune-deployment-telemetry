@@ -21,6 +21,7 @@ artifact: never commit it and revoke the credential when the POC ends.
 $UploadMode = 'DirectLogs'
 $BrokerUri = 'https://<FUNCTION-APP-HOSTNAME>/api/telemetry'
 $AssignmentTimestampUtc = '<ASSIGNMENT-TIMESTAMP-UTC>'
+$IntunePolicyId = '<INTUNE-POLICY-ID>'
 $TrustedIssuerCaSha256Thumbprints = @(
     '<ISSUING-CA-SHA256-THUMBPRINT>'
 )
@@ -33,6 +34,7 @@ $DirectStreamName = 'Custom-IntuneDeploymentTelemetry'
 $DirectIncludeSensitiveData = $false
 $EventLookbackHours = 72
 $MaximumMdmEvents = 20
+$MaximumImePollTimestamps = 100
 $UploadRetryCount = 4
 $UploadTimeoutSeconds = 30
 $SkipUpload = $false
@@ -42,7 +44,7 @@ Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
-$ScriptVersion = '1.4.6'
+$ScriptVersion = '1.5.0'
 $RegistryPath = 'HKLM:\SOFTWARE\Bigfix Tags\IntuneDeploymentTelemetry'
 $LogDirectory = Join-Path $env:ProgramData 'IntuneDeploymentTelemetry'
 $TranscriptPath = $null
@@ -666,6 +668,632 @@ function Get-EstimatedMdmCycle {
     }
 }
 
+function ConvertFrom-ImeCmTraceTimestamp {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [AllowEmptyString()]
+        [string]$Line
+    )
+
+    $dateMatch = [regex]::Match($Line, 'date="(?<Value>[^"]+)"')
+    $timeMatch = [regex]::Match($Line, 'time="(?<Value>[^"]+)"')
+    if (-not $dateMatch.Success -or -not $timeMatch.Success) {
+        return $null
+    }
+
+    try {
+        $localTimestamp = [datetime]::Parse(
+            ('{0} {1}' -f
+                $dateMatch.Groups['Value'].Value,
+                $timeMatch.Groups['Value'].Value),
+            [Globalization.CultureInfo]::InvariantCulture,
+            [Globalization.DateTimeStyles]::AllowWhiteSpaces
+        )
+        $localTimestamp = [datetime]::SpecifyKind(
+            $localTimestamp,
+            [DateTimeKind]::Unspecified
+        )
+        return [TimeZoneInfo]::ConvertTimeToUtc(
+            $localTimestamp,
+            [TimeZoneInfo]::Local
+        )
+    }
+    catch {
+        return $null
+    }
+}
+
+function Get-IntunePolicyIdentity {
+    [CmdletBinding()]
+    param(
+        [Parameter()]
+        [string]$ConfiguredPolicyId,
+
+        [Parameter()]
+        [string]$ExecutingScriptPath
+    )
+
+    $configured = [guid]::Empty
+    $hasConfigured = [guid]::TryParse($ConfiguredPolicyId, [ref]$configured) -and
+        $configured -ne [guid]::Empty
+
+    $guidPattern =
+        '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
+    $candidateIds = [Collections.Generic.List[guid]]::new()
+    if (-not [string]::IsNullOrWhiteSpace($ExecutingScriptPath)) {
+        foreach ($candidateMatch in [regex]::Matches(
+                $ExecutingScriptPath,
+                $guidPattern,
+                [Text.RegularExpressions.RegexOptions]::IgnoreCase
+            )) {
+            $candidate = [guid]::Empty
+            if ([guid]::TryParse($candidateMatch.Value, [ref]$candidate) -and
+                $candidate -ne [guid]::Empty -and
+                $candidate -notin $candidateIds) {
+                $candidateIds.Add($candidate)
+            }
+        }
+    }
+
+    $detected = [guid]::Empty
+    $hasDetected = $false
+    if (-not [string]::IsNullOrWhiteSpace($ExecutingScriptPath)) {
+        $fileName = [IO.Path]::GetFileNameWithoutExtension($ExecutingScriptPath)
+        $twoGuidMatch = [regex]::Match(
+            $fileName,
+            ('^(?:{0})_(?<PolicyId>{0})(?:_\d+)?$' -f $guidPattern),
+            [Text.RegularExpressions.RegexOptions]::IgnoreCase
+        )
+        $numberedPolicyMatch = [regex]::Match(
+            $ExecutingScriptPath,
+            ('(?:^|[\\/])(?<PolicyId>{0})_\d+(?:[\\/]|$)' -f $guidPattern),
+            [Text.RegularExpressions.RegexOptions]::IgnoreCase
+        )
+        $detectedText = if ($twoGuidMatch.Success) {
+            $twoGuidMatch.Groups['PolicyId'].Value
+        }
+        elseif ($numberedPolicyMatch.Success) {
+            $numberedPolicyMatch.Groups['PolicyId'].Value
+        }
+        else {
+            $null
+        }
+        $hasDetected = -not [string]::IsNullOrWhiteSpace($detectedText) -and
+            [guid]::TryParse($detectedText, [ref]$detected) -and
+            $detected -ne [guid]::Empty
+    }
+
+    $matchStatus = if ($hasConfigured -and $hasDetected) {
+        if ($configured -eq $detected) {
+            'ConfiguredAndDetectedMatch'
+        } else {
+            'ConfiguredAndDetectedMismatch'
+        }
+    } elseif ($hasConfigured) {
+        'ConfiguredOnly'
+    } elseif ($hasDetected) {
+        'DetectedFromScriptPath'
+    } elseif ($candidateIds.Count -gt 1) {
+        'AmbiguousScriptPath'
+    } else {
+        'Unavailable'
+    }
+
+    return [pscustomobject]@{
+        ConfiguredPolicyId = if ($hasConfigured) {
+            $configured.ToString()
+        } else { $null }
+        DetectedPolicyId   = if ($hasDetected) {
+            $detected.ToString()
+        } else { $null }
+        EffectivePolicyId  = if ($hasDetected) {
+            $detected.ToString()
+        } elseif ($hasConfigured) {
+            $configured.ToString()
+        } else { $null }
+        MatchStatus        = $matchStatus
+    }
+}
+
+function Get-ImeLogEvidence {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [datetime]$AssignmentUtc,
+
+        [Parameter(Mandatory)]
+        [datetime]$CollectionEndUtc,
+
+        [Parameter()]
+        [string]$PolicyId,
+
+        [Parameter(Mandatory)]
+        [int]$MaximumPollTimestamps,
+
+        [Parameter()]
+        [string]$LogDirectoryPath = (
+            Join-Path $env:ProgramData 'Microsoft\IntuneManagementExtension\Logs'
+        )
+    )
+
+    $result = [ordered]@{
+        LogFilesAnalyzed                 = 0
+        LogFilesFailed                   = 0
+        LogOldestRetainedUtc             = $null
+        LogNewestRetainedUtc             = $null
+        ManagementLogOldestRetainedUtc   = $null
+        ManagementLogNewestRetainedUtc   = $null
+        AgentLogOldestRetainedUtc        = $null
+        AgentLogNewestRetainedUtc        = $null
+        ManagementLogCoverageStatus      = 'NoLogFiles'
+        AgentLogCoverageStatus           = 'NoLogFiles'
+        LogCoverageStatus                = 'NoLogFiles'
+        LogEvidenceTruncated             = $false
+        PolicyPollCountSinceAssignment   = 0
+        EmptyPolicyResponseCount         = 0
+        DeviceCheckInCountSinceAssignment = 0
+        GenericWorkloadCheckInCount      = 0
+        FirstManagementActivityUtc       = $null
+        PolicyPollTimestampsUtc          = @()
+        PolicyPollTimestampsTruncated    = $false
+        PolicyReceivedUtc                = $null
+        PolicyProcessingUtc              = $null
+        ScriptMaterializedUtc            = $null
+        ExecutionIdentifiedUtc           = $null
+    }
+
+    if (-not (Test-Path -LiteralPath $LogDirectoryPath -PathType Container)) {
+        return [pscustomobject]$result
+    }
+
+    $files = @(
+        Get-ChildItem -LiteralPath $LogDirectoryPath -File -ErrorAction Stop |
+            Where-Object {
+                $_.Name -match
+                    '^(IntuneManagementExtension|AgentExecutor)(?:-[^.]+)?\.log$'
+            }
+    )
+    if ($files.Count -eq 0) {
+        return [pscustomobject]$result
+    }
+
+    $policyText = $null
+    if (-not [string]::IsNullOrWhiteSpace($PolicyId)) {
+        $policyText = ([guid]$PolicyId).ToString()
+    }
+    $deduplicationKeys = [Collections.Generic.HashSet[string]]::new(
+        [StringComparer]::OrdinalIgnoreCase
+    )
+    $pollTimestamps = [Collections.Generic.List[datetime]]::new()
+    $oldestTimestamp = $null
+    $newestTimestamp = $null
+    $managementOldestTimestamp = $null
+    $managementNewestTimestamp = $null
+    $agentOldestTimestamp = $null
+    $agentNewestTimestamp = $null
+
+    foreach ($file in $files) {
+        $stream = $null
+        $reader = $null
+        try {
+            $stream = [IO.FileStream]::new(
+                $file.FullName,
+                [IO.FileMode]::Open,
+                [IO.FileAccess]::Read,
+                [IO.FileShare]::ReadWrite
+            )
+            $reader = [IO.StreamReader]::new(
+                $stream,
+                [Text.Encoding]::UTF8,
+                $true
+            )
+            $result.LogFilesAnalyzed++
+            $isAgentLog = $file.Name -match '^AgentExecutor'
+            $pendingEntry = $null
+
+            while (-not $reader.EndOfStream) {
+                $line = $reader.ReadLine()
+                if ([string]::IsNullOrWhiteSpace($line) -and
+                    [string]::IsNullOrWhiteSpace($pendingEntry)) {
+                    continue
+                }
+                if ($line -match '<!\[LOG\[') {
+                    $pendingEntry = $line
+                }
+                elseif ($null -ne $pendingEntry) {
+                    $pendingEntry = $pendingEntry + "`n" + $line
+                }
+                else {
+                    $pendingEntry = $line
+                }
+                if ($line -notmatch '\]LOG\]!><time="') {
+                    continue
+                }
+
+                $entry = $pendingEntry
+                $pendingEntry = $null
+                $timestamp = ConvertFrom-ImeCmTraceTimestamp -Line $entry
+                if ($null -eq $timestamp) {
+                    continue
+                }
+                if ($null -eq $oldestTimestamp -or $timestamp -lt $oldestTimestamp) {
+                    $oldestTimestamp = $timestamp
+                }
+                if ($null -eq $newestTimestamp -or $timestamp -gt $newestTimestamp) {
+                    $newestTimestamp = $timestamp
+                }
+                if ($isAgentLog) {
+                    if ($null -eq $agentOldestTimestamp -or
+                        $timestamp -lt $agentOldestTimestamp) {
+                        $agentOldestTimestamp = $timestamp
+                    }
+                    if ($null -eq $agentNewestTimestamp -or
+                        $timestamp -gt $agentNewestTimestamp) {
+                        $agentNewestTimestamp = $timestamp
+                    }
+                }
+                else {
+                    if ($null -eq $managementOldestTimestamp -or
+                        $timestamp -lt $managementOldestTimestamp) {
+                        $managementOldestTimestamp = $timestamp
+                    }
+                    if ($null -eq $managementNewestTimestamp -or
+                        $timestamp -gt $managementNewestTimestamp) {
+                        $managementNewestTimestamp = $timestamp
+                    }
+                }
+                if ($timestamp -lt $AssignmentUtc -or
+                    $timestamp -gt $CollectionEndUtc.AddMinutes(5)) {
+                    continue
+                }
+
+                $eventType = $null
+                $eventDetail = ''
+                if ($entry -match
+                    '\[PowerShell\] Requesting policies with session id\s+(?<SessionId>[0-9a-f-]{36})') {
+                    $eventType = 'PolicyRequest'
+                    $eventDetail = $Matches['SessionId']
+                }
+                elseif ($entry -match '\[PowerShell\] response payload is') {
+                    if ($entry -match '\[PowerShell\] response payload is\s*\[\s*\]') {
+                        $eventType = 'EmptyPolicyResponse'
+                    }
+                    elseif ($policyText -and
+                        $entry.IndexOf(
+                            $policyText,
+                            [StringComparison]::OrdinalIgnoreCase
+                        ) -ge 0) {
+                        $eventType = 'TargetPolicyResponse'
+                    }
+                }
+                elseif ($entry -match
+                    '\[ServiceBase\], check in using device check in AAD App') {
+                    $eventType = 'DeviceCheckIn'
+                }
+                elseif ($entry -match
+                    '\[GenericWorkload\] Initiating GenericWorkload Checkin') {
+                    $eventType = 'GenericWorkloadCheckIn'
+                }
+                elseif ($policyText -and
+                    $entry.IndexOf(
+                        $policyText,
+                        [StringComparison]::OrdinalIgnoreCase
+                    ) -ge 0) {
+                    if ($entry -match '(?is)decrypt(?:ion|ed)?.*(?:complete|success)') {
+                        $eventType = 'ScriptMaterialized'
+                    }
+                    elseif ($entry -match
+                        '(?is)(?:processing|process).*(?:policy|powershell)') {
+                        $eventType = 'PolicyProcessing'
+                    }
+                    elseif ($entry -match
+                        '(?is)(?:Adding argument powershell with value|cmd line for running powershell is).+\.ps1') {
+                        $eventType = 'ExecutionIdentified'
+                    }
+                }
+
+                if ($null -eq $eventType) {
+                    continue
+                }
+
+                $eventKey = '{0}|{1}|{2}' -f
+                    $timestamp.Ticks,
+                    $eventType,
+                    $eventDetail
+                if (-not $deduplicationKeys.Add($eventKey)) {
+                    continue
+                }
+
+                switch ($eventType) {
+                    'PolicyRequest' {
+                        $result.PolicyPollCountSinceAssignment++
+                        $pollTimestamps.Add($timestamp)
+                    }
+                    'EmptyPolicyResponse' {
+                        $result.EmptyPolicyResponseCount++
+                    }
+                    'DeviceCheckIn' {
+                        $result.DeviceCheckInCountSinceAssignment++
+                    }
+                    'GenericWorkloadCheckIn' {
+                        $result.GenericWorkloadCheckInCount++
+                    }
+                    'TargetPolicyResponse' {
+                        if ($null -eq $result.PolicyReceivedUtc -or
+                            $timestamp -lt $result.PolicyReceivedUtc) {
+                            $result.PolicyReceivedUtc = $timestamp
+                        }
+                    }
+                    'PolicyProcessing' {
+                        if ($null -eq $result.PolicyProcessingUtc -or
+                            $timestamp -lt $result.PolicyProcessingUtc) {
+                            $result.PolicyProcessingUtc = $timestamp
+                        }
+                    }
+                    'ScriptMaterialized' {
+                        if ($null -eq $result.ScriptMaterializedUtc -or
+                            $timestamp -lt $result.ScriptMaterializedUtc) {
+                            $result.ScriptMaterializedUtc = $timestamp
+                        }
+                    }
+                    'ExecutionIdentified' {
+                        if ($null -eq $result.ExecutionIdentifiedUtc -or
+                            $timestamp -lt $result.ExecutionIdentifiedUtc) {
+                            $result.ExecutionIdentifiedUtc = $timestamp
+                        }
+                    }
+                }
+                if ($eventType -in @(
+                        'PolicyRequest',
+                        'EmptyPolicyResponse',
+                        'TargetPolicyResponse',
+                        'DeviceCheckIn',
+                        'GenericWorkloadCheckIn',
+                        'PolicyProcessing',
+                        'ScriptMaterialized',
+                        'ExecutionIdentified'
+                    ) -and
+                    ($null -eq $result.FirstManagementActivityUtc -or
+                    $timestamp -lt $result.FirstManagementActivityUtc)) {
+                    $result.FirstManagementActivityUtc = $timestamp
+                }
+            }
+        }
+        catch {
+            $result.LogFilesFailed++
+            $result.LogEvidenceTruncated = $true
+            Add-TelemetryError -Operation ('ReadImeLog:{0}' -f $file.Name) `
+                -ErrorRecord $_
+        }
+        finally {
+            if ($null -ne $reader) {
+                $reader.Dispose()
+            }
+            elseif ($null -ne $stream) {
+                $stream.Dispose()
+            }
+        }
+    }
+
+    $result.LogOldestRetainedUtc = $oldestTimestamp
+    $result.LogNewestRetainedUtc = $newestTimestamp
+    $result.ManagementLogOldestRetainedUtc = $managementOldestTimestamp
+    $result.ManagementLogNewestRetainedUtc = $managementNewestTimestamp
+    $result.AgentLogOldestRetainedUtc = $agentOldestTimestamp
+    $result.AgentLogNewestRetainedUtc = $agentNewestTimestamp
+
+    $managementRequiredEndUtc = if ($null -ne $result.PolicyReceivedUtc) {
+        $result.PolicyReceivedUtc
+    }
+    else {
+        $CollectionEndUtc
+    }
+    if ($null -eq $managementOldestTimestamp -or
+        $null -eq $managementNewestTimestamp) {
+        $result.ManagementLogCoverageStatus = 'NoParseableTimestamps'
+    }
+    elseif ($managementOldestTimestamp -gt $AssignmentUtc) {
+        $result.ManagementLogCoverageStatus = 'AssignmentPredatesRetainedLogs'
+    }
+    elseif ($managementNewestTimestamp -lt $AssignmentUtc) {
+        $result.ManagementLogCoverageStatus = 'NoEvidenceAfterAssignment'
+    }
+    elseif ($managementNewestTimestamp -ge $managementRequiredEndUtc) {
+        $result.ManagementLogCoverageStatus = 'Complete'
+    }
+    else {
+        $result.ManagementLogCoverageStatus = 'Partial'
+    }
+
+    if ($null -ne $result.ExecutionIdentifiedUtc) {
+        $result.AgentLogCoverageStatus = 'ExecutionMarkerFound'
+    }
+    elseif ($null -eq $agentOldestTimestamp -or $null -eq $agentNewestTimestamp) {
+        $result.AgentLogCoverageStatus = 'NoParseableTimestamps'
+    }
+    elseif ($agentOldestTimestamp -gt $AssignmentUtc) {
+        $result.AgentLogCoverageStatus = 'AssignmentPredatesRetainedLogs'
+    }
+    elseif ($agentNewestTimestamp -ge $CollectionEndUtc) {
+        $result.AgentLogCoverageStatus = 'Complete'
+    }
+    else {
+        $result.AgentLogCoverageStatus = 'Partial'
+    }
+
+    if ($result.ManagementLogCoverageStatus -eq 'Complete' -and
+        $result.AgentLogCoverageStatus -in @('Complete', 'ExecutionMarkerFound')) {
+        $result.LogCoverageStatus = 'Complete'
+    }
+    elseif ($null -eq $oldestTimestamp -or $null -eq $newestTimestamp) {
+        $result.LogCoverageStatus = 'NoParseableTimestamps'
+    }
+    else {
+        $result.LogCoverageStatus = 'Partial'
+    }
+
+    $orderedPollTimestamps = @($pollTimestamps | Sort-Object)
+    $result.PolicyPollTimestampsTruncated =
+        $orderedPollTimestamps.Count -gt $MaximumPollTimestamps
+    if ($result.PolicyPollTimestampsTruncated) {
+        $result.LogEvidenceTruncated = $true
+    }
+    $result.PolicyPollTimestampsUtc = @(
+        $orderedPollTimestamps |
+            Select-Object -First $MaximumPollTimestamps |
+            ForEach-Object { ConvertTo-UtcIso8601 -Value $_ }
+    )
+
+    foreach ($propertyName in @(
+        'LogOldestRetainedUtc',
+        'LogNewestRetainedUtc',
+        'ManagementLogOldestRetainedUtc',
+        'ManagementLogNewestRetainedUtc',
+        'AgentLogOldestRetainedUtc',
+        'AgentLogNewestRetainedUtc',
+        'FirstManagementActivityUtc',
+        'PolicyReceivedUtc',
+        'PolicyProcessingUtc',
+        'ScriptMaterializedUtc',
+        'ExecutionIdentifiedUtc'
+    )) {
+        if ($null -ne $result[$propertyName]) {
+            $result[$propertyName] =
+                ConvertTo-UtcIso8601 -Value $result[$propertyName]
+        }
+    }
+
+    return [pscustomobject]$result
+}
+
+function Get-DeploymentDelayClassification {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        $ImeEvidence,
+
+        [Parameter()]
+        $MdmCycleCount,
+
+        [Parameter()]
+        [Nullable[datetime]]$AssignmentUtc,
+
+        [Parameter()]
+        [Nullable[datetime]]$LastBootUtc
+    )
+
+    if ($null -eq $AssignmentUtc) {
+        return [pscustomobject]@{
+            Classification = 'InsufficientEvidence'
+            Confidence     = 'Low'
+        }
+    }
+    $mdmActivityCount = if ($null -eq $MdmCycleCount) {
+        0
+    } else {
+        [int]$MdmCycleCount
+    }
+    $imeActivityCount =
+        [int]$ImeEvidence.PolicyPollCountSinceAssignment +
+        [int]$ImeEvidence.DeviceCheckInCountSinceAssignment +
+        [int]$ImeEvidence.GenericWorkloadCheckInCount
+    foreach ($lifecycleProperty in @(
+            'PolicyReceivedUtc',
+            'PolicyProcessingUtc',
+            'ScriptMaterializedUtc',
+            'ExecutionIdentifiedUtc'
+        )) {
+        if ($null -ne $ImeEvidence.$lifecycleProperty) {
+            $imeActivityCount++
+        }
+    }
+
+    if ($ImeEvidence.LogCoverageStatus -ne 'Complete' -or
+        $ImeEvidence.LogEvidenceTruncated) {
+        return [pscustomobject]@{
+            Classification = 'InsufficientEvidence'
+            Confidence     = 'Low'
+        }
+    }
+    if ($null -ne $LastBootUtc -and
+        [datetime]$LastBootUtc -gt [datetime]$AssignmentUtc -and
+        $mdmActivityCount -eq 0 -and
+        ($null -eq $ImeEvidence.FirstManagementActivityUtc -or
+        [datetime]::Parse(
+            $ImeEvidence.FirstManagementActivityUtc,
+            [Globalization.CultureInfo]::InvariantCulture,
+            [Globalization.DateTimeStyles]::RoundtripKind
+        ) -ge [datetime]$LastBootUtc)) {
+        return [pscustomobject]@{
+            Classification = 'ProbablyOfflineBeforeBoot'
+            Confidence     = 'Medium'
+        }
+    }
+
+    if ($imeActivityCount -eq 0 -and $mdmActivityCount -eq 0) {
+        return [pscustomobject]@{
+            Classification = 'ProbablyOfflineOrDisconnected'
+            Confidence     = 'Medium'
+        }
+    }
+    if ($null -ne $ImeEvidence.PolicyReceivedUtc -and
+        $null -ne $ImeEvidence.ExecutionIdentifiedUtc) {
+        $received = [datetime]::Parse(
+            $ImeEvidence.PolicyReceivedUtc,
+            [Globalization.CultureInfo]::InvariantCulture,
+            [Globalization.DateTimeStyles]::RoundtripKind
+        )
+        $execution = [datetime]::Parse(
+            $ImeEvidence.ExecutionIdentifiedUtc,
+            [Globalization.CultureInfo]::InvariantCulture,
+            [Globalization.DateTimeStyles]::RoundtripKind
+        )
+        if (($execution - $received).TotalMinutes -le 5) {
+            return [pscustomobject]@{
+                Classification = 'PolicyDeliveredThenExecutedPromptly'
+                Confidence     = 'High'
+            }
+        }
+
+        return [pscustomobject]@{
+            Classification = 'DelayAfterPolicyDelivery'
+            Confidence     = 'High'
+        }
+    }
+    if ($null -ne $ImeEvidence.PolicyProcessingUtc -or
+        $null -ne $ImeEvidence.ScriptMaterializedUtc -or
+        $null -ne $ImeEvidence.ExecutionIdentifiedUtc) {
+        return [pscustomobject]@{
+            Classification = 'PolicyLifecycleObservedWithoutReceiptMarker'
+            Confidence     = 'Medium'
+        }
+    }
+    if ([int]$ImeEvidence.PolicyPollCountSinceAssignment -eq 0) {
+        return [pscustomobject]@{
+            Classification = 'OnlineWithoutPowerShellPolling'
+            Confidence     = 'Medium'
+        }
+    }
+    if ($null -eq $ImeEvidence.PolicyReceivedUtc) {
+        return [pscustomobject]@{
+            Classification = 'PowerShellPollingPolicyNotReturned'
+            Confidence     = 'High'
+        }
+    }
+    if ($null -eq $ImeEvidence.ExecutionIdentifiedUtc) {
+        return [pscustomobject]@{
+            Classification = 'PolicyReceivedExecutionNotIdentified'
+            Confidence     = 'High'
+        }
+    }
+
+    return [pscustomobject]@{
+        Classification = 'PolicyReceivedExecutionNotIdentified'
+        Confidence     = 'High'
+    }
+}
+
 function Get-PendingRestartState {
     [CmdletBinding()]
     param()
@@ -1049,7 +1677,16 @@ function New-TelemetryPayload {
         [int]$MdmEventLookbackHours,
 
         [Parameter(Mandatory)]
-        [int]$MdmMaximumEvents
+        [int]$MdmMaximumEvents,
+
+        [Parameter()]
+        [string]$ConfiguredPolicyId,
+
+        [Parameter()]
+        [string]$ExecutingScriptPath,
+
+        [Parameter(Mandatory)]
+        [int]$ImeMaximumPollTimestamps
     )
 
     $operatingSystem = Invoke-TelemetryOperation -Name 'GetOperatingSystem' -Operation {
@@ -1161,6 +1798,59 @@ function New-TelemetryPayload {
     } else {
         $null
     }
+    $policyIdentity = Get-IntunePolicyIdentity `
+        -ConfiguredPolicyId $ConfiguredPolicyId `
+        -ExecutingScriptPath $ExecutingScriptPath
+    $imeEvidence = if ($null -ne $assignment) {
+        Invoke-TelemetryOperation -Name 'GetImeLogEvidence' -Operation {
+            Get-ImeLogEvidence -AssignmentUtc $assignment `
+                -CollectionEndUtc $CurrentExecutionUtc `
+                -PolicyId $policyIdentity.EffectivePolicyId `
+                -MaximumPollTimestamps $ImeMaximumPollTimestamps
+        }
+    } else {
+        $null
+    }
+    $lastBootForClassification = if ($null -ne $lastBootUtc) {
+        [datetime]::Parse(
+            $lastBootUtc,
+            [Globalization.CultureInfo]::InvariantCulture,
+            [Globalization.DateTimeStyles]::RoundtripKind
+        )
+    } else {
+        $null
+    }
+    $delayClassification = if ($null -ne $imeEvidence) {
+        Get-DeploymentDelayClassification -ImeEvidence $imeEvidence `
+            -MdmCycleCount $cycles.Count `
+            -AssignmentUtc $assignment `
+            -LastBootUtc $lastBootForClassification
+    } else {
+        [pscustomobject]@{
+            Classification = 'InsufficientEvidence'
+            Confidence     = 'Low'
+        }
+    }
+    $assignmentToImeExecution = $null
+    $imePolicyToExecution = $null
+    if ($null -ne $imeEvidence -and $imeEvidence.ExecutionIdentifiedUtc) {
+        $imeExecution = [datetime]::Parse(
+            $imeEvidence.ExecutionIdentifiedUtc,
+            [Globalization.CultureInfo]::InvariantCulture,
+            [Globalization.DateTimeStyles]::RoundtripKind
+        )
+        $assignmentToImeExecution =
+            [Math]::Round(($imeExecution - $assignment).TotalMinutes, 2)
+        if ($imeEvidence.PolicyReceivedUtc) {
+            $imeReceived = [datetime]::Parse(
+                $imeEvidence.PolicyReceivedUtc,
+                [Globalization.CultureInfo]::InvariantCulture,
+                [Globalization.DateTimeStyles]::RoundtripKind
+            )
+            $imePolicyToExecution =
+                [Math]::Round(($imeExecution - $imeReceived).TotalSeconds, 2)
+        }
+    }
 
     $userUpn = if ($dsreg -and $dsreg.UserUPN) {
         $dsreg.UserUPN
@@ -1191,6 +1881,79 @@ function New-TelemetryPayload {
         CurrentExecutionTimestampUtc  = ConvertTo-UtcIso8601 -Value $CurrentExecutionUtc
         AssignmentTimestampUtc        = if ($assignment) { ConvertTo-UtcIso8601 -Value $assignment } else { $null }
         AssignmentToExecutionMinutes  = $assignmentLatency
+        ConfiguredIntunePolicyId       = $policyIdentity.ConfiguredPolicyId
+        DetectedIntunePolicyId         = $policyIdentity.DetectedPolicyId
+        IntunePolicyIdMatchStatus      = $policyIdentity.MatchStatus
+        IMEPolicyPollCountSinceAssignment = if ($imeEvidence) {
+            $imeEvidence.PolicyPollCountSinceAssignment
+        } else { $null }
+        IMEEmptyPolicyResponseCount    = if ($imeEvidence) {
+            $imeEvidence.EmptyPolicyResponseCount
+        } else { $null }
+        IMEDeviceCheckInCountSinceAssignment = if ($imeEvidence) {
+            $imeEvidence.DeviceCheckInCountSinceAssignment
+        } else { $null }
+        IMEGenericWorkloadCheckInCount = if ($imeEvidence) {
+            $imeEvidence.GenericWorkloadCheckInCount
+        } else { $null }
+        IMEPolicyPollTimestampsUtc     = if ($imeEvidence) {
+            @($imeEvidence.PolicyPollTimestampsUtc)
+        } else { @() }
+        IMEPolicyPollTimestampsTruncated = if ($imeEvidence) {
+            $imeEvidence.PolicyPollTimestampsTruncated
+        } else { $false }
+        IMEPolicyReceivedUtc           = if ($imeEvidence) {
+            $imeEvidence.PolicyReceivedUtc
+        } else { $null }
+        IMEPolicyProcessingUtc         = if ($imeEvidence) {
+            $imeEvidence.PolicyProcessingUtc
+        } else { $null }
+        IMEScriptMaterializedUtc       = if ($imeEvidence) {
+            $imeEvidence.ScriptMaterializedUtc
+        } else { $null }
+        IMEExecutionIdentifiedUtc      = if ($imeEvidence) {
+            $imeEvidence.ExecutionIdentifiedUtc
+        } else { $null }
+        AssignmentToIMEExecutionMinutes = $assignmentToImeExecution
+        IMEPolicyToExecutionSeconds    = $imePolicyToExecution
+        IMELogOldestRetainedUtc        = if ($imeEvidence) {
+            $imeEvidence.LogOldestRetainedUtc
+        } else { $null }
+        IMELogNewestRetainedUtc        = if ($imeEvidence) {
+            $imeEvidence.LogNewestRetainedUtc
+        } else { $null }
+        IMEManagementLogOldestRetainedUtc = if ($imeEvidence) {
+            $imeEvidence.ManagementLogOldestRetainedUtc
+        } else { $null }
+        IMEManagementLogNewestRetainedUtc = if ($imeEvidence) {
+            $imeEvidence.ManagementLogNewestRetainedUtc
+        } else { $null }
+        IMEAgentLogOldestRetainedUtc   = if ($imeEvidence) {
+            $imeEvidence.AgentLogOldestRetainedUtc
+        } else { $null }
+        IMEAgentLogNewestRetainedUtc   = if ($imeEvidence) {
+            $imeEvidence.AgentLogNewestRetainedUtc
+        } else { $null }
+        IMEManagementLogCoverageStatus = if ($imeEvidence) {
+            $imeEvidence.ManagementLogCoverageStatus
+        } else { 'AssignmentTimestampNotProvided' }
+        IMEAgentLogCoverageStatus      = if ($imeEvidence) {
+            $imeEvidence.AgentLogCoverageStatus
+        } else { 'AssignmentTimestampNotProvided' }
+        IMELogFilesAnalyzed            = if ($imeEvidence) {
+            $imeEvidence.LogFilesAnalyzed
+        } else { 0 }
+        IMELogFilesFailed              = if ($imeEvidence) {
+            $imeEvidence.LogFilesFailed
+        } else { 0 }
+        IMELogCoverageStatus           = if ($imeEvidence) {
+            $imeEvidence.LogCoverageStatus
+        } else { 'AssignmentTimestampNotProvided' }
+        IMELogEvidenceTruncated        = if ($imeEvidence) {
+            $imeEvidence.LogEvidenceTruncated
+        } else { $false }
+        DeploymentDelayClassification = $delayClassification.Classification
+        DeploymentDelayConfidence     = $delayClassification.Confidence
         LastBootTimeUtc               = $lastBootUtc
         UptimeHours                   = $uptimeHours
         OSVersion                     = $osVersion
@@ -1239,6 +2002,10 @@ try {
     }
     if ($MaximumMdmEvents -lt 1 -or $MaximumMdmEvents -gt 100) {
         throw 'MaximumMdmEvents must be between 1 and 100.'
+    }
+    if ($MaximumImePollTimestamps -lt 1 -or
+        $MaximumImePollTimestamps -gt 500) {
+        throw 'MaximumImePollTimestamps must be between 1 and 500.'
     }
     if ($UploadRetryCount -lt 1 -or $UploadRetryCount -gt 10) {
         throw 'UploadRetryCount must be between 1 and 10.'
@@ -1310,7 +2077,10 @@ try {
         -CurrentExecutionUtc $currentExecutionUtc `
         -PolicyAssignmentTimestampUtc $assignmentValue `
         -MdmEventLookbackHours $EventLookbackHours `
-        -MdmMaximumEvents $MaximumMdmEvents
+        -MdmMaximumEvents $MaximumMdmEvents `
+        -ConfiguredPolicyId $IntunePolicyId `
+        -ExecutingScriptPath $PSCommandPath `
+        -ImeMaximumPollTimestamps $MaximumImePollTimestamps
 
     if ($SkipUpload) {
         $payload.BrokerUploadSuccess = $false

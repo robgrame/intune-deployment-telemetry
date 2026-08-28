@@ -2,6 +2,9 @@
 
 [CmdletBinding()]
 param(
+    [Parameter(Mandatory)]
+    [guid]$IntunePolicyId,
+
     [Parameter()]
     [datetimeoffset]$AssignmentTimestampUtc = [datetimeoffset]::UtcNow,
 
@@ -23,7 +26,7 @@ param(
 
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
-$ScriptVersion = '1.1.4'
+$ScriptVersion = '1.2.0'
 
 $template = Get-Content -LiteralPath $TemplatePath -Raw
 $secret = (Get-Content -LiteralPath $SecretPath -Raw).Trim()
@@ -37,6 +40,7 @@ if ($secret.Contains("`r") -or $secret.Contains("`n")) {
 $secretPlaceholder = '<APP-REGISTRATION-CLIENT-SECRET>'
 $secretAssignment = "`$DirectClientSecret = '$secretPlaceholder'"
 $assignmentPlaceholder = '<ASSIGNMENT-TIMESTAMP-UTC>'
+$policyIdPlaceholder = '<INTUNE-POLICY-ID>'
 if ([regex]::Matches(
         $template,
         [regex]::Escape($secretAssignment)
@@ -49,6 +53,12 @@ if ([regex]::Matches(
     ).Count -ne 1) {
     throw 'The POC template must contain exactly one assignment timestamp placeholder.'
 }
+if ([regex]::Matches(
+        $template,
+        [regex]::Escape($policyIdPlaceholder)
+    ).Count -ne 1) {
+    throw 'The POC template must contain exactly one Intune Policy ID placeholder.'
+}
 
 $effectiveAssignmentTimestamp = $AssignmentTimestampUtc.ToUniversalTime()
 $configured = $template.Replace(
@@ -57,6 +67,9 @@ $configured = $template.Replace(
 ).Replace(
     $assignmentPlaceholder,
     $effectiveAssignmentTimestamp.ToString('o')
+).Replace(
+    $policyIdPlaceholder,
+    $IntunePolicyId.ToString()
 )
 
 $parseTokens = $null
@@ -72,6 +85,7 @@ if ($parseErrors.Count -gt 0) {
 
 $requiredConfiguredVariables = @(
     'AssignmentTimestampUtc',
+    'IntunePolicyId',
     'DirectTenantId',
     'DirectClientId',
     'DirectClientSecret',
@@ -114,8 +128,9 @@ if (-not (Test-Path -LiteralPath $outputDirectory -PathType Container)) {
 $secret = $null
 $configured = $null
 Write-Output (
-    'Generated POC Platform Script {0}; AssignmentTimestampUtc={1}; Path={2}' -f
+    'Generated POC Platform Script {0}; PolicyId={1}; AssignmentTimestampUtc={2}; Path={3}' -f
     $ScriptVersion,
+    $IntunePolicyId,
     $effectiveAssignmentTimestamp.ToString('o'),
     $fullOutputPath
 )

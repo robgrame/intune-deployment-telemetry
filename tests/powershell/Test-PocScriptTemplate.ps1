@@ -67,6 +67,7 @@ try {
     Push-Location $testDirectory
     try {
         $generatorOutput = & $generatorPath `
+            -IntunePolicyId '5d645e5c-d175-4374-81d3-edd1e211a100' `
             -AssignmentTimestampUtc '2026-08-28T08:00:00Z' `
             -TemplatePath $pocPath `
             -SecretPath $secretPath `
@@ -90,12 +91,19 @@ try {
         ) -or
         -not $generated.Contains(
             "`$AssignmentTimestampUtc = '2026-08-28T08:00:00.0000000+00:00'"
+        ) -or
+        -not $generated.Contains(
+            "`$IntunePolicyId = '5d645e5c-d175-4374-81d3-edd1e211a100'"
         )) {
         throw 'The POC script generator produced invalid configuration.'
     }
     if ($generatorOutput -notmatch
         'AssignmentTimestampUtc=2026-08-28T08:00:00\.0000000\+00:00') {
         throw 'The POC script generator did not report the stamped timestamp.'
+    }
+    if ($generatorOutput -notmatch
+        'PolicyId=5d645e5c-d175-4374-81d3-edd1e211a100') {
+        throw 'The POC script generator did not report the Policy ID.'
     }
 }
 finally {
