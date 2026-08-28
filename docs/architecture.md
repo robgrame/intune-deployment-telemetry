@@ -158,6 +158,9 @@ The broker doesn't forward the endpoint JSON unchanged. It:
 The DCR maps `Custom-IntuneDeploymentTelemetry` to
 `IntuneDeploymentTelemetry_CL`. Log Analytics stores analytical telemetry;
 Application Insights stores broker operations and never the raw payload.
+Every profile also deploys a shared Azure Monitor Workbook associated with the
+workspace for customer-facing latency, distribution, trend, and per-device
+evidence.
 
 ## Environment profiles
 

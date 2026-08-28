@@ -48,4 +48,6 @@ output customTableName string = observability.outputs.tableName
 output dataCollectionRuleName string = observability.outputs.dcrName
 output logsIngestionEndpoint string = observability.outputs.logsIngestionEndpoint
 output dcrImmutableId string = observability.outputs.dcrImmutableId
+output workbookName string = observability.outputs.workbookName
+output workbookResourceId string = observability.outputs.workbookResourceId
 output deploymentSku string = 'poc'

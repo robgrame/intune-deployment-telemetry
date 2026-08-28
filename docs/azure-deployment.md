@@ -42,10 +42,10 @@ Registration, then expose its **service principal object ID** to Bicep:
   -PocServicePrincipalObjectId '<SERVICE-PRINCIPAL-OBJECT-ID>'
 ```
 
-The Proof of Concept (`poc`) profile creates only the workspace, custom table,
-direct DCR, and DCR-scoped role assignment. If the object ID is missing, the
-The service principal object ID is mandatory for `poc`; the script stops
-before deployment if it isn't supplied.
+The Proof of Concept (`poc`) profile creates the workspace, custom table,
+direct DCR, DCR-scoped role assignment, and deployment-evidence Workbook. The
+service principal object ID is mandatory for `poc`; the script stops before
+deployment if it isn't supplied.
 
 The Bicep deployment never receives or stores the client secret. Configure it
 only in the signed Intune Platform Script and revoke it immediately when the
@@ -60,8 +60,9 @@ health URL, App Configuration store, and Key Vault. They create
 `IntuneTelemetry:*` settings, store the trusted-root bundle in Key Vault, and
 connect it with an App Configuration Key Vault reference.
 
-The `poc` deployment outputs the workspace, custom table, DCR name, direct
-logs-ingestion endpoint, and immutable DCR ID required by the endpoint script.
+Every profile outputs the Workbook name and resource ID. The `poc` deployment
+also outputs the workspace, custom table, DCR name, direct logs-ingestion
+endpoint, and immutable DCR ID required by the endpoint script.
 
 Pass multiple paths to `TrustedRootCertificatePaths` during CA rotation so the
 current and next roots overlap safely.

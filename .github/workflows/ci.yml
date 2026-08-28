@@ -67,6 +67,10 @@ jobs:
         shell: pwsh
         run: .\tests\powershell\Test-TrackedScriptPlaceholders.ps1
 
+      - name: Test deployment-evidence workbook
+        shell: pwsh
+        run: .\tests\powershell\Test-WorkbookTemplate.ps1
+
       - name: Build Bicep
         shell: pwsh
         run: |

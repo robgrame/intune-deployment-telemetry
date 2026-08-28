@@ -28,8 +28,18 @@ var workspaceName = 'law-${resourcePrefix}-${uniqueSuffix}'
 var applicationInsightsName = 'appi-${resourcePrefix}-${uniqueSuffix}'
 var dceName = 'dce-${resourcePrefix}-${uniqueSuffix}'
 var dcrName = 'dcr-${resourcePrefix}-${uniqueSuffix}'
+var workbookDisplayName = 'Intune Deployment Evidence'
+var workbookName = guid(workspace.id, 'intune-deployment-evidence')
 var tableName = 'IntuneDeploymentTelemetry_CL'
 var streamName = 'Custom-IntuneDeploymentTelemetry'
+var workbookSerializedData = replace(
+  loadTextContent('../workbooks/deployment-evidence.workbook.json'),
+  '__WORKSPACE_RESOURCE_ID__',
+  workspace.id
+)
+var workbookTags = union(tags, {
+  'hidden-title': workbookDisplayName
+})
 var telemetryColumns = [
   {
     name: 'TimestampUtc'
@@ -310,6 +320,20 @@ resource applicationInsights 'Microsoft.Insights/components@2020-02-02' = if (de
   }
 }
 
+resource deploymentEvidenceWorkbook 'Microsoft.Insights/workbooks@2022-04-01' = {
+  name: workbookName
+  location: location
+  kind: 'shared'
+  tags: workbookTags
+  properties: {
+    displayName: workbookDisplayName
+    serializedData: workbookSerializedData
+    version: '1.0'
+    sourceId: workspace.id
+    category: 'workbook'
+  }
+}
+
 var monitoringMetricsPublisherRoleId = subscriptionResourceId(
   'Microsoft.Authorization/roleDefinitions',
   '3913510d-42f4-4e42-8a64-420c390055eb'
@@ -330,6 +354,8 @@ output tableName string = tableName
 output dcrName string = dataCollectionRule.name
 output dcrResourceId string = dataCollectionRule.id
 output dcrImmutableId string = dataCollectionRule.properties.immutableId
+output workbookName string = deploymentEvidenceWorkbook.name
+output workbookResourceId string = deploymentEvidenceWorkbook.id
 output logsIngestionEndpoint string = deployDataCollectionEndpoint
   ? dataCollectionEndpoint!.properties.logsIngestion.endpoint
   : dataCollectionRule.properties.endpoints.logsIngestion

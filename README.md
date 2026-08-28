@@ -34,6 +34,7 @@ flowchart LR
     H[Azure Key Vault] -->|Key Vault reference| G
     C -->|Managed Identity| D[Logs Ingestion API<br/>DCE + DCR]
     D --> E[(Log Analytics<br/>Custom Table)]
+    E --> L[Azure Monitor Workbook<br/>Deployment Evidence]
     B --> F[Application Insights]
     I[Intune SCEP / PKCS<br/>or Cloud PKI] -->|issues device cert| A
     J[Bicep<br/>dev / prod / premium] --> B
@@ -66,6 +67,7 @@ Read the [architecture](docs/architecture.md) and
 | Log retention | 30 days | 30 days | 90 days | 365 days |
 | Daily ingestion cap | 1 GB | 1 GB | 20 GB | 100 GB |
 | App Configuration | None | Free | Standard | Standard |
+| Deployment evidence Workbook | Yes | Yes | Yes | Yes |
 | Intended use | Direct-ingestion experiment | Development | Production baseline | Large/critical tenants |
 
 The `dev`, `prod`, and `premium` broker profiles enforce HTTPS, TLS 1.2+,
@@ -115,8 +117,9 @@ Set `DeploymentType` to `poc`, `dev`, `prod`, or `premium`. The deployment
 script selects the correct Bicep entry point and validates profile-specific
 parameters.
 
-The `poc` (**Proof of Concept**) profile deploys only Log Analytics, the custom
-table, a direct DCR, and DCR-scoped RBAC for an existing App Registration.
+The `poc` (**Proof of Concept**) profile deploys Log Analytics, the custom
+table, a direct DCR, DCR-scoped RBAC for an existing App Registration, and the
+shared deployment-evidence Workbook.
 Pilot clients authenticate with a short-lived shared client secret embedded
 in the Platform Script. This removes the broker security boundary and must not
 be promoted to production. See the
@@ -164,6 +167,7 @@ az bicep build --file .\infra\poc.bicep
 - [Azure deployment](docs/azure-deployment.md)
 - [Intune deployment](docs/intune-deployment.md)
 - [KQL query library](docs/kql.md)
+- [Deployment evidence Workbook](docs/deployment-workbook.md)
 - [Security policy](SECURITY.md)
 - [Contributing](CONTRIBUTING.md)
 
