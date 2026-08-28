@@ -78,10 +78,20 @@ This model proves transport and schema viability, not production security:
    role assignment.
 4. Configure the endpoint script with `UploadMode = 'DirectLogs'`, the tenant
    ID, client ID, client secret, and Bicep outputs.
-5. Sign and assign the Platform Script to the disposable POC device group.
-6. Measure accepted rows, latency, failures, and operational effort.
-7. Delete the client secret and direct-ingestion resource group when the
+5. Keep the secret in the ignored adjacent `*.secret.txt` file and use
+   `New-ConfiguredPocPlatformScript.ps1` to generate the single-file script
+   immediately before signing and assignment.
+6. Sign and assign the generated Platform Script to the disposable POC device
+   group.
+7. Measure accepted rows, latency, failures, and operational effort.
+8. Delete the client secret and direct-ingestion resource group when the
    experiment ends.
+
+In the manual POC workflow, `AssignmentToExecutionMinutes` is
+generation-to-execution time and includes signing, upload, and assignment
+delay. Run the generator immediately before those actions and record the UTC
+timestamp it prints. Exact assignment-to-execution measurement requires
+automating generation, Graph upload, and assignment in one operation.
 
 ## Guardrails
 
@@ -98,6 +108,7 @@ This model proves transport and schema viability, not production security:
 - Apply a 30-day retention and a 1-GB/day workspace cap.
 - Set an explicit end date no later than 30 days after deployment.
 - Delete the client secret from the App Registration at experiment end.
+- Delete local `*.secret.txt` and `*.generated.ps1` files at experiment end.
 - Never commit a configured script containing the secret.
 - Assume the secret is disclosed to every system that retains PowerShell
   script-block logs or Intune script content. Keep DCR-only RBAC and mandatory

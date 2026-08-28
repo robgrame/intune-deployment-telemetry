@@ -38,7 +38,7 @@ $UploadMode = 'DirectLogs'
 $AssignmentTimestampUtc = '2026-08-28T08:00:00Z'
 $DirectTenantId = '<tenant-guid>'
 $DirectClientId = '<app-registration-client-id>'
-$DirectClientSecret = '<app-registration-client-secret>'
+$DirectClientSecret = '<APP-REGISTRATION-CLIENT-SECRET>'
 $DirectLogsIngestionEndpoint = 'https://<dcr-endpoint>'
 $DirectDcrImmutableId = 'dcr-<immutable-id>'
 $DirectStreamName = 'Custom-IntuneDeploymentTelemetry'
@@ -53,6 +53,34 @@ application identity until the credential is revoked or expires.
 Direct mode omits UPN, the interactive username, and raw MDM event messages by
 default. Set `DirectIncludeSensitiveData` to `$true` only after an explicit
 privacy review.
+
+The repository contains a POC-specific template in:
+
+`scripts\intune\poc\Intune-DeploymentTelemetry-POC.ps1`
+
+Store the actual secret in the adjacent ignored file:
+
+`scripts\intune\poc\Intune-DeploymentTelemetry-POC.secret.txt`
+
+Generate the single-file Platform Script immediately before assignment:
+
+```powershell
+.\scripts\intune\poc\New-ConfiguredPocPlatformScript.ps1
+```
+
+The generator stamps the current UTC time by default. Run it immediately
+before uploading and assigning the script. Use `-AssignmentTimestampUtc` only
+to reproduce a controlled test with an explicit ISO 8601 timestamp, such as
+`2026-08-28T08:00:00Z`. The generator prints the exact UTC value it stamped.
+
+Upload `Intune-DeploymentTelemetry-POC.generated.ps1`. Intune Platform Scripts
+don't deploy adjacent files, so the generated file contains the secret and
+must remain ignored, local, and protected.
+
+In this manual workflow, `AssignmentToExecutionMinutes` is actually measured
+from generation to execution. It therefore includes signing, upload, and
+assignment delay. Exact assignment-to-execution measurement requires
+automating generation, Graph upload, and assignment in one operation.
 
 Increment `Major.Minor.Build`, sign the final file, and don't modify it after
 signing.
